@@ -37,6 +37,7 @@ If docs contradict this skill, propose updates and confirm before editing the sk
 4. Pause for confirmation on high-impact actions (`scancel`, overwrite sync, destructive cleanup).
 5. Never inline secrets; use hidden prompt input or secure env handling.
 6. If repo has `slurm/` scripts with profiles, submit from script path (not copied one-liners).
+7. Enable observability: live logs, job accounting, and required W&B tracking.
 
 ```dot
 digraph hpc_flow {
@@ -64,10 +65,14 @@ digraph hpc_flow {
 | Submit profile | `sbatch <slurm_script>.sh <profile>` |
 | Queue by user | `squeue -u <unix_user>` |
 | Watch queue | `watch -n 1 squeue -u <unix_user>` |
+| Tail job logs | `tail -f slurm-<job_id>.out` and `tail -f slurm-<job_id>.err` |
 | Cancel all your jobs | `scancel -u "$(whoami)"` |
 | Copy local -> remote | `rsync -avz -P <local_path> <ssh_alias>:<remote_path>` |
 | Copy remote -> local | `rsync -avz -P <ssh_alias>:<remote_path> <local_path>` |
 | GPU stats for job | `srun --jobid=<job_id> --overlap nvidia-smi -l 1` |
+| Job accounting | `sacct -j <job_id> --format=JobID,State,Elapsed,MaxRSS,ExitCode` |
+| Efficiency summary | `seff <job_id>` |
+| W&B offline sync | `wandb sync <offline_run_dir>` |
 | Interactive debug shell | `srun --nodes=1 --gres=gpu:1 --time=00:30:00 --pty /bin/bash` |
 | Scratch usage | `du -sh <scratch_dir>` and `du -h --max-depth=1 <scratch_dir> \| sort -hr` |
 
@@ -91,6 +96,14 @@ ssh "$SSH_ALIAS" "mkdir -p \"$PROJECT_DIR\" \"$SCRATCH_DIR\" && du -sh \"$SCRATC
 ```
 
 Private repo auth: do not embed PAT in URL.
+
+## Observability Guidance
+
+- Minimum visibility: queue status (`squeue`), job logs (`slurm-<job_id>.out/.err`), and GPU telemetry (`nvidia-smi`).
+- Post-run visibility: capture `sacct`/`seff` summaries for memory, runtime, and exit status.
+- W&B tracking is required for training runs.
+- Prefer offline-first logging on restricted clusters, then sync later.
+- Never inline `WANDB_API_KEY`; pass via secure environment setup.
 
 ## Rationalization Table
 
@@ -118,3 +131,5 @@ All of these mean: pause, parameterize, preflight, then continue.
 - Running ad-hoc sbatch commands when repo `slurm/*.sh` already encodes the environment
 - Monitoring wrong user (`squeue -u`) due hardcoded shortname
 - Using container paths not mounted in `apptainer exec --bind`
+- Relying only on queue state without tailing logs or collecting post-run accounting
+- Running training without W&B tracking/sync and losing experiment visibility

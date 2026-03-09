@@ -15,6 +15,7 @@ Use this file as the high-level entry point for HPC workflow skills.
 2. Use `hpc-training-operations` when running or debugging jobs with that image.
 3. Pass concrete values each run (`SSH_ALIAS`, paths, script names, image tag) to avoid stale notes.
 4. If uncertain about cluster behavior, check `cluster-profiles/<cluster_name>.md` before executing.
+5. During/after runs, collect observability data (logs, `sacct`, `seff`, and W&B sync).
 
 ## Cluster Profiles
 
