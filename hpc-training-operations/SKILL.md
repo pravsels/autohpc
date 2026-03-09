@@ -25,11 +25,11 @@ Do not use for non-Slurm local training or cloud-only workflows.
 When command behavior, scheduler settings, modules, or storage guidance is unclear, consult:
 `cluster-profiles/<cluster_name>.md`.
 
-If cluster is unknown, ask the user at session start which cluster they are using, then load the matching profile file.
-
 If docs contradict this skill, propose updates and confirm before editing the skill text.
 
 ## Core Pattern
+
+Slurm scripts go in `slurm/` in the target repo.
 
 1. Set `SSH_ALIAS`, `UNIX_USER`, `PROJECT_NAME`, `PROJECT_CODE`, `PROJECT_DIR`, `SCRATCH_DIR`.
 2. Preflight: host reachable, tools exist, paths/quota valid.
