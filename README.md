@@ -2,6 +2,12 @@
 
 Reusable HPC workflow docs and skills for local container setup, cluster deployment, and Slurm job operations.
 
+## Quick Start
+
+Paste this to your agent:
+
+> Read ../autohpc/README.md and follow its agent instructions. Apply them to this repo.
+
 ## Repo Layout
 
 - `hpc-workflows.md`
@@ -25,12 +31,6 @@ Create `cluster-profiles/<cluster_name>.md` with:
 - any cluster-specific caveats
 
 Never store secrets in profile files.
-
-## Quick Start
-
-Paste this to your agent:
-
-> Read ../autohpc/README.md and follow its agent instructions. Apply them to this repo.
 
 ## If You Are An Agent
 
