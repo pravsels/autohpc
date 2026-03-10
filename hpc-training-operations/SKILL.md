@@ -29,10 +29,22 @@ If docs contradict this skill, propose updates and confirm before editing the sk
 
 ## Core Pattern
 
-Slurm scripts go in `slurm/` in the target repo.
+Slurm scripts go in `slurm/` in the target repo — only for repeatable jobs (training, eval). Do not write sbatch scripts for debugging or one-off operations. Use `srun` commands for those instead.
+
+Run SSH commands yourself — do not ask the user to run them for you. Request `all` permissions so you can access the user's SSH config and certificates. Only fall back to asking the user if SSH fails after that (e.g. expired certificate).
+
+Open an SSH ControlMaster connection at the start and reuse it for all subsequent commands:
+
+```bash
+export SSH_CTRL="/tmp/ssh-ctrl-%r@%h:%p"
+ssh -fNM -o ControlPath="$SSH_CTRL" "$SSH_ALIAS"            # open once
+ssh -o ControlPath="$SSH_CTRL" "$SSH_ALIAS" "<command>"      # reuse for each command
+ssh -o ControlPath="$SSH_CTRL" -O exit "$SSH_ALIAS"          # close when done
+```
 
 1. Set `SSH_ALIAS`, `UNIX_USER`, `PROJECT_NAME`, `PROJECT_CODE`, `PROJECT_DIR`, `SCRATCH_DIR`.
-2. Preflight: host reachable, tools exist, paths/quota valid.
+2. Open ControlMaster connection to `SSH_ALIAS`.
+3. Preflight: host reachable, tools exist, paths/quota valid.
 3. Run stages: setup -> transfer -> submit -> monitor -> debug -> cleanup.
 4. Pause for confirmation on high-impact actions (`scancel`, overwrite sync, destructive cleanup).
 5. Never inline secrets; use hidden prompt input or secure env handling.
