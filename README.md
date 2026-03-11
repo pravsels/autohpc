@@ -18,6 +18,8 @@ Paste this to your agent:
   - Slurm submission, monitoring, observability, debugging, and cleanup.
 - `hpc-dataset-adaptation/SKILL.md`
   - Adapting code to read the user's dataset format without converting data.
+- `hpc-run-tracking/SKILL.md`
+  - Maintaining per-run logs for submitted jobs: config, status, results, next steps.
 - `cluster-profiles/`
   - One file per cluster with docs links and cluster-specific notes.
 - `ops-program.md`
@@ -37,6 +39,8 @@ Never store secrets in profile files.
 This repo is a reference — read and follow the docs here, then apply them to whatever target repo you are working in. Do **not** copy or scaffold these files into the target repo.
 
 The Docker container is the execution environment — for local work **and** for the cluster. Do not install dependencies on the host or use conda/mamba/venv as an alternative. Build the image first, run everything inside it.
+
+Keep commit messages short — a few words, not a paragraph. Check `git log` in the target repo and match its style.
 
 ### Phase 1 — Local Docker
 
@@ -61,7 +65,8 @@ The workflow is simple: push code to GitHub, pull on HPC, upload image and data,
 1. Follow Phase 3 of `hpc-container-promotion/SKILL.md` (in this repo) to promote the image for the target cluster.
 2. Identify the target cluster and read `cluster-profiles/<cluster_name>.md` (in this repo) to decide the deployment path.
 3. Follow `hpc-training-operations/SKILL.md` (in this repo) for cluster submission, monitoring, debugging, and observability.
-4. The only scripts you should create in the target repo's `slurm/` are training and eval sbatch scripts. Nothing else.
+4. Follow `hpc-run-tracking/SKILL.md` (in this repo) to log every submitted job — create a run log at submission time and update it when checking status or collecting results.
+5. The only scripts you should create in the target repo's `slurm/` are training and eval sbatch scripts. Nothing else.
 
 ## Inspiration
 

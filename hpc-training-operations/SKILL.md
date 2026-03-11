@@ -79,6 +79,16 @@ A training sbatch script should be short and linear. Before writing one, check t
 
 **Resume support for walltime-limited jobs:** If the cluster enforces a max walltime (e.g. 1 day), the sbatch script should support resuming from a checkpoint path passed as an environment variable. Keep it simple — one optional `LOAD_CKPT_PATH` variable that appends a load argument to the training command.
 
+**Verify dataset paths on the cluster before submitting.** Datasets may not be where you expect — they might live under a different project's scratch, or not be uploaded yet. SSH in and `ls` the path. Do not assume local paths match remote ones.
+
+**Bind files directly from scratch into the container.** If training needs a dataset on scratch, bind it with `--bind /scratch/.../dataset.h5:/mnt/dataset.h5`. Do not create symlink indirections, `/workspace/data/` wrappers, or copy data into the repo directory.
+
+**Use `REPO_DIR` for config paths, not `SCRIPT_DIR`.** Slurm copies sbatch scripts to a spool directory before execution, so `$(dirname $0)` resolves to the spool path, not the repo. Always resolve config paths relative to the repo directory variable.
+
+**Never overwrite `LD_LIBRARY_PATH` inside the container.** Apptainer's `--nv` flag injects host NVIDIA driver libraries via `LD_LIBRARY_PATH`. If you set `LD_LIBRARY_PATH=...` without appending `$LD_LIBRARY_PATH`, you remove the driver libs and get "Found no NVIDIA driver" errors. Always append: `export LD_LIBRARY_PATH=/your/paths:$LD_LIBRARY_PATH`.
+
+**All config changes go through git.** When changing training parameters (batch size, learning rate, etc.), edit the config file in the repo, commit, push, pull on HPC, then submit. Do not use `--export` env var overrides or rsync individual files — that breaks the "push code, pull on HPC, submit" workflow and makes runs unreproducible.
+
 ### Template
 
 Base your sbatch scripts on this structure. Adapt paths, bind mounts, container runtime, and the training command to the target repo. Check `cluster-profiles/<cluster_name>.md` for cluster-specific details (path layout, modules, container runtime).
@@ -99,6 +109,10 @@ Base your sbatch scripts on this structure. Adapt paths, bind mounts, container 
 
 set -e
 
+# Load cluster modules (check cluster profile for specifics).
+# module purge
+# module load <container_module>
+
 # Paths — repo on home, everything heavy on scratch.
 home_dir="/home/<project_code>/<username>"
 scratch_dir="/scratch/<project_code>/<username>"
@@ -110,8 +124,8 @@ WANDB_DIR="${data_dir}"
 WANDB_CACHE_DIR="${data_dir}/wandb_cache"
 WANDB_CONFIG_DIR="${data_dir}/wandb_config"
 
-# Training config — point at the repo's config, let Python load it.
-CONFIG_FILE="<path/to/config.yaml>"
+# Training config — use REPO_DIR, not SCRIPT_DIR (Slurm copies scripts to spool).
+CONFIG_FILE="${repo_dir}/<path/to/config.yaml>"
 DATASET_PATH="${data_dir}/<dataset_file>"
 CHECKPOINT_DIR="${data_dir}/checkpoints"
 
@@ -229,7 +243,13 @@ Private repo auth: do not embed PAT in URL.
 - Putting anything other than training/eval sbatch scripts in `slurm/`
 - Mixing local and remote paths in one command
 - Copying large datasets with `scp -r` when resumable `rsync -P` is needed
+- Submitting without verifying dataset paths exist on the cluster
 - Submitting without checking script/account/partition settings
+- Creating indirection layers for container bind mounts (symlinks, wrapper dirs) instead of binding directly
+- Resolving config paths from `SCRIPT_DIR` / `$(dirname $0)` — Slurm copies scripts to spool, so these point to the wrong place
+- Overwriting `LD_LIBRARY_PATH` instead of appending — removes Apptainer's injected NVIDIA driver libs
+- Using `--export` env overrides or rsync to change config on the cluster instead of committing and pushing through git
+- Forgetting `module load` for the container runtime (check cluster profile)
 - Monitoring wrong user (`squeue -u`) due hardcoded shortname
 - Using container paths not mounted in `apptainer exec --bind`
 - Relying only on queue state without tailing logs or collecting post-run accounting

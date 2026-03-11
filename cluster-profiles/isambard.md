@@ -71,9 +71,26 @@ srun --ntasks=1 --gpus=1 --jobid=<job_id> --overlap --pty /bin/bash -l
 sbatch slurm/<training_script>.sh
 ```
 
+## GitHub Access
+
+GitHub SSH keys don't work from Isambard. Clone repos using HTTPS with a personal access token (PAT). The user may have a token file on the cluster (e.g. `~/pat.txt`). Use `GIT_ASKPASS` to pass the token without exposing it in command history:
+
+```bash
+TOKEN="$(cat ~/pat.txt)"
+ASKPASS="$(mktemp)"
+cat > "$ASKPASS" <<'EOF'
+#!/bin/sh
+case "$1" in *Username*) echo "x-access-token";; *Password*) cat ~/pat.txt;; esac
+EOF
+chmod 700 "$ASKPASS"
+GIT_ASKPASS="$ASKPASS" GIT_TERMINAL_PROMPT=0 git clone https://github.com/<org>/<repo>.git
+rm -f "$ASKPASS"
+```
+
 ## Notes
 
 - Login nodes are assigned randomly; do not assume a persistent session.
 - Do not run compute workloads on login nodes — use Slurm.
 - Architecture is arm64 — Docker images built for amd64 will not work. Check with `uname -m` on the cluster.
+- `--nv` flag in Apptainer injects host NVIDIA libs via `LD_LIBRARY_PATH`. Never overwrite this variable inside the container — always append to it.
 - Do not store secrets or credentials here.
