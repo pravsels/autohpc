@@ -22,8 +22,6 @@ Paste this to your agent:
   - Maintaining per-run logs for submitted jobs: config, status, results, next steps.
 - `cluster-profiles/`
   - One file per cluster with docs links and cluster-specific notes.
-- `ops-program.md`
-  - General operating constraints for how this repo should be maintained.
 
 ## Adding A Cluster
 
@@ -64,9 +62,19 @@ The workflow is simple: push code to GitHub, pull on HPC, upload image and data,
 
 1. Follow Phase 3 of `hpc-container-promotion/SKILL.md` (in this repo) to promote the image for the target cluster.
 2. Identify the target cluster and read `cluster-profiles/<cluster_name>.md` (in this repo) to decide the deployment path.
-3. Follow `hpc-training-operations/SKILL.md` (in this repo) for cluster submission, monitoring, debugging, and observability.
-4. Follow `hpc-run-tracking/SKILL.md` (in this repo) to log every submitted job — create a run log at submission time and update it when checking status or collecting results.
-5. The only scripts you should create in the target repo's `slurm/` are training and eval sbatch scripts. Nothing else.
+3. Follow `hpc-training-operations/SKILL.md` (in this repo) to write sbatch scripts and submit jobs.
+4. The only scripts you should create in the target repo's `slurm/` are training and eval sbatch scripts. Nothing else.
+
+### Ongoing — Run tracking
+
+Once you start submitting jobs, follow `hpc-run-tracking/SKILL.md` (in this repo) for every run. This is not a one-time setup step — it is an ongoing practice.
+
+- Create a run log in `runs/` when you submit a job.
+- Update it when checking status or collecting results.
+- For replication runs, a single log per task is enough.
+- For experiment runs, maintain a comparison summary across variations.
+
+Read `hpc-run-tracking/SKILL.md` for the full format and workflow.
 
 ## Inspiration
 
