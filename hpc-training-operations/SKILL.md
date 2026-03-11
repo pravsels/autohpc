@@ -7,8 +7,8 @@ description: Use when running ML training workflows on Slurm-based HPC clusters,
 
 ## Overview
 
-Use this when acting on cluster notes that may contain stale usernames, paths, job IDs, or secret-bearing commands.
-Core principle: parameterize first, preflight second, execute staged commands third.
+Use this when submitting and managing training jobs on Slurm-based HPC clusters.
+Core principle: push code, upload artifacts, submit job. Keep it simple.
 
 ## When to Use
 
@@ -29,7 +29,17 @@ If docs contradict this skill, propose updates and confirm before editing the sk
 
 ## Core Pattern
 
-Slurm scripts go in `slurm/` in the target repo — only for repeatable jobs (training, eval). Do not write sbatch scripts for debugging or one-off operations. Use `srun` commands for those instead.
+The `slurm/` directory in the target repo is only for training and eval sbatch scripts. Do not create helper scripts, wrapper scripts, preflight scripts, or promotion scripts there.
+
+The deployment workflow is simple:
+
+1. Push code changes to GitHub.
+2. Pull the repo on the HPC.
+3. Upload the container image and any datasets to the HPC.
+4. Submit the training job with `sbatch`.
+5. Monitor, debug with `srun`, collect results.
+
+Do not overengineer this. Do not create submission wrappers, promotion scripts, or multi-stage shell pipelines. Run SSH commands directly.
 
 Run SSH commands yourself — do not ask the user to run them for you. Request `all` permissions so you can access the user's SSH config and certificates. Only fall back to asking the user if SSH fails after that (e.g. expired certificate).
 
@@ -44,28 +54,106 @@ ssh -o ControlPath="$SSH_CTRL" -O exit "$SSH_ALIAS"          # close when done
 
 1. Set `SSH_ALIAS`, `UNIX_USER`, `PROJECT_NAME`, `PROJECT_CODE`, `PROJECT_DIR`, `SCRATCH_DIR`.
 2. Open ControlMaster connection to `SSH_ALIAS`.
-3. Preflight: host reachable, tools exist, paths/quota valid.
-3. Run stages: setup -> transfer -> submit -> monitor -> debug -> cleanup.
-4. Pause for confirmation on high-impact actions (`scancel`, overwrite sync, destructive cleanup).
-5. Never inline secrets; use hidden prompt input or secure env handling.
-6. If repo has `slurm/` scripts with profiles, submit from script path (not copied one-liners).
-7. Enable observability: live logs, job accounting, and required W&B tracking.
+3. Push code to GitHub, pull on HPC.
+4. Upload container image and datasets to HPC scratch.
+5. Submit training with `sbatch slurm/<training_script>.sh`. Use `srun` for debugging.
+6. Pause for confirmation on high-impact actions (`scancel`, overwrite sync, destructive cleanup).
+7. Never inline secrets; use hidden prompt input or secure env handling.
+8. Enable observability: live logs, job accounting, and required W&B tracking.
 
-```dot
-digraph hpc_flow {
-    "Start HPC workflow" [shape=ellipse];
-    "Parameterize values" [shape=box];
-    "Preflight passes?" [shape=diamond];
-    "Run staged commands" [shape=box];
-    "High-impact step?" [shape=diamond];
-    "Ask confirmation / secure input" [shape=box];
-    "Start HPC workflow" -> "Parameterize values";
-    "Parameterize values" -> "Preflight passes?";
-    "Preflight passes?" -> "Run staged commands" [label="yes"];
-    "Preflight passes?" -> "Parameterize values" [label="no"];
-    "Run staged commands" -> "High-impact step?";
-    "High-impact step?" -> "Ask confirmation / secure input" [label="yes"];
-}
+## Writing Sbatch Scripts
+
+A training sbatch script should be short and linear. Before writing one, check the repo for existing slurm scripts and match their style and naming.
+
+**Structure:** SBATCH directives at the top, a few path variables, then one `apptainer exec` (or equivalent container run) command that calls the application entry point. That's it.
+
+**Let the application load its own config.** If the repo uses Hydra, PyTorch Lightning, or any config framework, pass the config name/path as a CLI argument. Do not parse YAML in bash, do not re-map config fields to shell variables, do not build long argument lists from shell-parsed values. The application already knows how to load its config.
+
+**Storage layout:** Keep the repo clone on `$HOME` (small, code only). Keep heavy artifacts — container images, datasets, checkpoints, outputs, W&B caches — on scratch. Bind scratch paths into the container so training never writes large files to the home directory.
+
+**Only create scripts the user asked for.** If they say "training", create one training script. Do not also create eval, preflight, or "stage N" variants unless asked. Do not create scripts for things that should be run as direct `srun` commands.
+
+**Train config files live with the repo's other configs** (e.g. `configurations/`), not in `slurm/`. The `slurm/` directory is only for sbatch scripts.
+
+**Name scripts to match the repo's conventions.** Look at existing scripts in the repo. If there are none, ask the user or use a descriptive name like `<project>_train_<stage>_slurm.sh`.
+
+**Resume support for walltime-limited jobs:** If the cluster enforces a max walltime (e.g. 1 day), the sbatch script should support resuming from a checkpoint path passed as an environment variable. Keep it simple — one optional `LOAD_CKPT_PATH` variable that appends a load argument to the training command.
+
+### Template
+
+Base your sbatch scripts on this structure. Adapt paths, bind mounts, container runtime, and the training command to the target repo. Check `cluster-profiles/<cluster_name>.md` for cluster-specific details (path layout, modules, container runtime).
+
+```bash
+#!/bin/bash
+#SBATCH --job-name=<project>-<task>
+#SBATCH --nodes=1
+#SBATCH --gpus=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=0G
+#SBATCH --exclusive
+#SBATCH --time=1-00:00:00
+#SBATCH --output=slurm-%j.out
+#SBATCH --error=slurm-%j.err
+#SBATCH --requeue
+
+set -e
+
+# Paths — repo on home, everything heavy on scratch.
+home_dir="/home/<project_code>/<username>"
+scratch_dir="/scratch/<project_code>/<username>"
+repo_dir="${home_dir}/<project>"
+data_dir="${scratch_dir}/<project>"
+container="${data_dir}/container/<image>.sif"
+HF_CACHE="${scratch_dir}/huggingface_cache"
+WANDB_DIR="${data_dir}"
+WANDB_CACHE_DIR="${data_dir}/wandb_cache"
+WANDB_CONFIG_DIR="${data_dir}/wandb_config"
+
+# Training config — point at the repo's config, let Python load it.
+CONFIG_FILE="<path/to/config.yaml>"
+DATASET_PATH="${data_dir}/<dataset_file>"
+CHECKPOINT_DIR="${data_dir}/checkpoints"
+
+mkdir -p "${HF_CACHE}" "${WANDB_CACHE_DIR}" "${WANDB_CONFIG_DIR}" "${CHECKPOINT_DIR}"
+
+start_time="$(date -Is --utc)"
+echo "===================================="
+echo "Job ID: ${SLURM_JOB_ID}"
+echo "Node: ${SLURM_NODELIST}"
+echo "Started (UTC): ${start_time}"
+echo "===================================="
+
+TRAIN_CMD="python <entry_point> \
+    --config ${CONFIG_FILE} \
+    --dataset ${DATASET_PATH} \
+    --checkpoint-dir ${CHECKPOINT_DIR}"
+
+set +e
+apptainer exec --nv \
+    --pwd "${repo_dir}" \
+    --bind "${scratch_dir}:${scratch_dir}" \
+    --bind "${HF_CACHE}:/root/.cache/huggingface" \
+    --env "HF_HOME=/root/.cache/huggingface" \
+    "${container}" \
+    bash -c "export WANDB_DIR=${WANDB_DIR} WANDB_CACHE_DIR=${WANDB_CACHE_DIR} WANDB_CONFIG_DIR=${WANDB_CONFIG_DIR} && \
+        ${TRAIN_CMD}"
+EXIT_CODE=$?
+set -e
+
+end_time="$(date -Is --utc)"
+echo ""
+echo "===================================="
+echo "Started (UTC):  ${start_time}"
+echo "Finished (UTC): ${end_time}"
+echo "Exit Code: ${EXIT_CODE}"
+echo "===================================="
+
+if [ ${EXIT_CODE} -ne 0 ]; then
+    echo "ERROR: Training failed with exit code ${EXIT_CODE}"
+    echo "Check slurm-${SLURM_JOB_ID}.err for details"
+    exit ${EXIT_CODE}
+fi
 ```
 
 ## Quick Reference
@@ -90,21 +178,26 @@ digraph hpc_flow {
 
 ## Implementation Example
 
-Use this bootstrap before running setup/submit/monitor commands:
-
 ```bash
 export SSH_ALIAS="<your_cluster_alias>"
-export UNIX_USER="${UNIX_USER:-$(whoami)}"             # Or shortname.project if required
+export UNIX_USER="${UNIX_USER:-$(whoami)}"
 export PROJECT_NAME="<project_name>"
 export PROJECT_CODE="<project_code>"
 export PROJECT_DIR="$HOME/${PROJECT_NAME}"
 export SCRATCH_DIR="/scratch/${PROJECT_CODE}/${UNIX_USER}/${PROJECT_NAME}"
 
-ssh "$SSH_ALIAS" "hostname && command -v sbatch squeue scancel apptainer"
-ssh "$SSH_ALIAS" "mkdir -p \"$PROJECT_DIR\" \"$SCRATCH_DIR\" && du -sh \"$SCRATCH_DIR\" || true"
+# 1. Pull latest code on HPC
+ssh "$SSH_ALIAS" "cd $PROJECT_DIR && git pull"
 
-# Optional repo-aware submit pattern
-# ssh "$SSH_ALIAS" "cd \"$PROJECT_DIR\" && sbatch slurm/<script>.sh <profile>"
+# 2. Upload container image (already built locally)
+rsync -avP <image>.tar "$SSH_ALIAS:$SCRATCH_DIR/"
+
+# 3. Submit training
+ssh "$SSH_ALIAS" "cd $PROJECT_DIR && sbatch slurm/<training_script>.sh"
+
+# 4. Monitor
+ssh "$SSH_ALIAS" "squeue -u $UNIX_USER"
+ssh "$SSH_ALIAS" "tail -f $PROJECT_DIR/slurm-<job_id>.out"
 ```
 
 Private repo auth: do not embed PAT in URL.
@@ -117,30 +210,26 @@ Private repo auth: do not embed PAT in URL.
 - Prefer offline-first logging on restricted clusters, then sync later.
 - Never inline `WANDB_API_KEY`; pass via secure environment setup.
 
-## Rationalization Table
-
-| Excuse | Reality |
-|---|---|
-| "Run my old notes exactly, no checks" | Stale paths and usernames break jobs; always preflight first. |
-| "Hardcode my user/alias; it is faster" | Skills must be reusable; parameterize identity and paths. |
-| "Paste token/API key inline for speed" | Inline secrets leak in history and logs; use env or secure prompts. |
-| "Cancel everything now, we can recover later" | `scancel` is high impact; confirm scope before execution. |
-
 ## Red Flags - Stop and Re-check
 
 - Commands contain hardcoded user handles, project IDs, or old job IDs
 - Any secret appears inline (`PAT`, `WANDB_API_KEY`, tokenized git URL)
 - Destructive commands run without confirmation (`scancel`, overwrite sync)
 - Host/path assumptions are unverified (`~/...` vs `/scratch/...`)
-
-All of these mean: pause, parameterize, preflight, then continue.
+- You are writing a shell script instead of running a command directly
 
 ## Common Mistakes
 
+- Parsing train config in bash (awk/sed/embedded Python) instead of letting the application load it
+- Putting train config files in `slurm/` instead of with the repo's other configs
+- Creating scripts the user didn't ask for (eval, preflight, promotion, submission wrappers)
+- Writing long sbatch scripts that re-map every config field to a shell variable
+- Storing checkpoints/outputs/data on `$HOME` instead of scratch
+- Creating submission wrappers, preflight scripts, or promotion scripts — just run commands directly
+- Putting anything other than training/eval sbatch scripts in `slurm/`
 - Mixing local and remote paths in one command
 - Copying large datasets with `scp -r` when resumable `rsync -P` is needed
 - Submitting without checking script/account/partition settings
-- Running ad-hoc sbatch commands when repo `slurm/*.sh` already encodes the environment
 - Monitoring wrong user (`squeue -u`) due hardcoded shortname
 - Using container paths not mounted in `apptainer exec --bind`
 - Relying only on queue state without tailing logs or collecting post-run accounting

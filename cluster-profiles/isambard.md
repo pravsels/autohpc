@@ -31,11 +31,26 @@ The agent cannot run `clifton auth` — if SSH fails, ask the user to run it and
 - Each GPU allocation gives 1 GH200 with 72 CPU cores and 115 GB Grace RAM.
 - Container runtime: `apptainer`.
 
+## Storage
+
+- Home: `/home/<project_code>/<username>` — small quota, code only. Use for `git clone`.
+- Scratch: `/scratch/<project_code>/<username>` — large (TBs), no backup. Use for containers, datasets, checkpoints, outputs, W&B caches.
+
+## Modules
+
+Include in sbatch scripts before running containers:
+
+```bash
+module purge
+module load brics/apptainer-multi-node
+```
+
 ## Slurm
 
 - Docs: [https://docs.isambard.ac.uk/user-documentation/guides/slurm/](https://docs.isambard.ac.uk/user-documentation/guides/slurm/)
 - You **must** specify GPU resources with `--gpus` or `--gpus-per-*`.
 - Partition: `workq`.
+- Max walltime: 1 day (`--time=1-00:00:00`). Jobs that hit the limit are killed — checkpoint frequently and support resume.
 
 ### Debugging (use `srun`, not sbatch scripts)
 

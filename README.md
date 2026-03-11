@@ -56,9 +56,12 @@ Follow `hpc-dataset-adaptation/SKILL.md` (in this repo) to adapt the target repo
 
 Only begin this phase after Phase 1 (and Phase 2 if applicable) is complete and the Docker image works locally.
 
+The workflow is simple: push code to GitHub, pull on HPC, upload image and data, submit training. Do not create helper scripts, wrapper scripts, or multi-stage pipelines. Run commands directly.
+
 1. Follow Phase 3 of `hpc-container-promotion/SKILL.md` (in this repo) to promote the image for the target cluster.
 2. Identify the target cluster and read `cluster-profiles/<cluster_name>.md` (in this repo) to decide the deployment path.
 3. Follow `hpc-training-operations/SKILL.md` (in this repo) for cluster submission, monitoring, debugging, and observability.
+4. The only scripts you should create in the target repo's `slurm/` are training and eval sbatch scripts. Nothing else.
 
 ## Inspiration
 

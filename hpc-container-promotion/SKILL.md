@@ -74,7 +74,7 @@ Only begin this after the Docker image builds and smoke tests pass locally.
 
 If the cluster architecture differs from local (e.g. arm64 vs amd64), you will likely need to rebuild for that architecture. Before starting a cross-arch build, verify that pinned packages in `requirements.txt` have wheels available for the target architecture and Python version. Builds are expensive in time — check availability first, resolve all blockers, then build once. When a specific package fails during a build, verify its wheel exists for the target platform before changing the Dockerfile and rebuilding.
 
-Any promotion or preflight scripts go in `slurm/` in the target repo alongside job scripts.
+Do not create promotion scripts, preflight scripts, or submission wrappers. Run commands directly.
 
 Run SSH commands yourself — do not ask the user to run them for you. Request `all` permissions so you can access the user's SSH config and certificates. Only fall back to asking the user if SSH fails after that (e.g. expired certificate).
 
@@ -87,46 +87,27 @@ ssh -o ControlPath="$SSH_CTRL" "$SSH_ALIAS" "<command>"      # reuse for each co
 ssh -o ControlPath="$SSH_CTRL" -O exit "$SSH_ALIAS"          # close when done
 ```
 
-6. Parameterize cluster paths: `SSH_ALIAS`, `REMOTE_ARTIFACT_TARGET`.
-7. Open ControlMaster connection to `SSH_ALIAS`.
-7. Export Docker image tar (`docker save`).
-8. Check the cluster profile to decide whether deployment uses Docker directly or requires conversion.
-9. If required, check cluster runtime/version (`apptainer` vs `singularity`) before choosing conversion path.
-10. Convert to the required artifact format (for example `.sif`) only when the cluster requires it.
-11. Upload/publish the final artifact and verify path/tag/size.
-12. Keep promotion metadata (tag, date, source commit) next to artifact.
-13. Hand off to Slurm scripts in `slurm/` with an explicit image path/tag.
+The deployment workflow:
+
+1. Push code to GitHub and pull on the HPC.
+2. Read `cluster-profiles/<cluster_name>.md` to check the container runtime. Not all clusters run Docker — many require `.sif` images via `apptainer`/`singularity`. This determines what you upload.
+3. Export the Docker image (`docker save`). If the cluster requires `.sif`, convert locally (`apptainer build`) before uploading.
+4. Upload the container artifact and any datasets to HPC scratch.
+5. Hand off to `hpc-training-operations/SKILL.md` for job submission.
 
 ### Phase 3 Quick Reference
 
-| Goal | Command Template |
+| Goal | Command |
 |---|---|
-| Check cluster deployment mode | `read cluster-profiles/<cluster_name>.md and determine docker vs converted artifact` |
 | Export tar | `docker save -o <image>_<tag>.tar <image>:<tag>` |
-| Check cluster runtime | `ssh <ssh_alias> "command -v apptainer || command -v singularity; apptainer --version || singularity --version"` |
 | Convert tar to sif | `apptainer build <image>_<tag>.sif docker-archive://<image>_<tag>.tar` |
-| Upload artifact | `rsync -avP <artifact> <ssh_alias>:<remote_target>/` |
-| Verify remote artifact | `ssh <ssh_alias> "ls -lh <remote_target>/<artifact>"` |
-
-### Phase 3 Example
-
-```bash
-export SSH_ALIAS="<your_cluster_alias>"
-export REMOTE_ARTIFACT_TARGET="/scratch/<project_code>/<unix_user>/<project_name>/container"
-export OUT_DIR="$REPO_DIR/dist"
-mkdir -p "$OUT_DIR"
-
-# Choose deployment path from cluster profile:
-# - If cluster accepts Docker directly, publish/tag/push the Docker image there.
-# - If cluster requires a converted artifact, use a local conversion approach that fits
-#   your environment, then upload and verify the resulting artifact.
-
-# Slurm handoff (repo has slurm/*.sh scripts)
-# sbatch "$REPO_DIR/slurm/<job_script>.sh"
-```
+| Upload artifact | `rsync -avP <artifact> <ssh_alias>:<remote_path>/` |
+| Verify remote artifact | `ssh <ssh_alias> "ls -lh <remote_path>/<artifact>"` |
 
 ## Common Mistakes
 
+- Creating promotion scripts, submission wrappers, or preflight scripts — just run the commands directly
+- Uploading a Docker tar without checking if the cluster even runs Docker — read the cluster profile for the container runtime first
 - Reusing mutable tags (`latest`) so runs are not reproducible
 - Treating `python -V` or a bare import as a smoke test — run real application workflows
 - Skipping local smoke tests before conversion
