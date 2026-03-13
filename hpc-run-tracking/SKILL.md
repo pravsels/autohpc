@@ -9,16 +9,17 @@ description: Use when submitting, monitoring, or reviewing HPC training runs to 
 
 Use this after Phase 3 setup is complete and you are in the ongoing submit/monitor/iterate loop. Every job submission gets a run log file that tracks what was submitted, what happened, and what to do next.
 
-There are two modes of operation:
+There are three modes of operation:
 
 - **Replication** — verifying the repo's training works on your cluster with your data. Usually a small number of runs. The goal is "does this work?" Once it does, you're done or you move to experiments.
 - **Experiments** — iterating on the setup: trying different hyperparameters, architectures, data configurations. The goal is "which variation is best?" Many runs, compared against each other.
+- **Pipeline** — supporting jobs that feed into training but aren't training themselves: embedding generation, data preprocessing, format conversion, dataset construction. The goal is "produce an artifact that a training run needs." Use a parenthetical to specify the kind, e.g. `pipeline (data generation)`, `pipeline (embedding extraction)`, `pipeline (format conversion)`.
 
-Both use the same run log format. Experiments add a comparison summary.
+All three use the same run log format. Experiments add a comparison summary.
 
 ## When to Use
 
-- Submitting a training or eval job
+- Submitting a training, eval, or pipeline job
 - Checking on a running or completed job
 - Resuming a run after walltime interruption
 - Comparing experiment results to decide what to try next
@@ -37,7 +38,7 @@ Include at minimum:
 # <task> — <short description>
 
 ## Mode
-- run_type: <replication or experiment>
+- run_type: <replication, experiment, or pipeline (subtype)>
 - objective: <one line — what this run is trying to verify or test>
 
 ## Config
@@ -128,6 +129,6 @@ Each experiment run should be on its own git branch or tagged commit so you can 
 - Creating a new file for every resumption of the same run
 - Logging status without the step count or loss — timestamps alone aren't useful
 - Forgetting to record the checkpoint path in results — makes resumption a guessing game
-- Not recording run_type (replication vs experiment) — makes intent unclear when reviewing later
+- Not recording run_type (replication vs experiment vs pipeline) — makes intent unclear when reviewing later
 - Running experiments without updating the comparison summary — then you lose track of what's been tried
 - Not branching/tagging experiment code — then you can't recover what produced a good result
