@@ -144,16 +144,22 @@ And fill in the **W&B** section. Record the local offline dir immediately, then 
 
 The synced link is a clickable URL to the W&B dashboard where training dynamics (loss curves, metrics, system stats) can be inspected. If not yet synced, leave it as `pending — run wandb sync <local>`.
 
-### W&B API key
+### W&B sync on HPC
 
-`wandb sync` requires an API key. If sync fails with "No API key configured", ask the user to place their key in a dotfile on the cluster (e.g. `~/.wandb_key`), then export it before syncing:
+On HPC, `wandb` typically isn't installed on the host. Run `wandb sync` inside the container:
 
 ```bash
-export WANDB_API_KEY="$(cat ~/.wandb_key)"
-wandb sync <offline-run-dir>
+apptainer exec --bind /scratch/... <container.sif> bash -lc \
+  'export WANDB_API_KEY="$(cat ~/.wandb_key)"; wandb sync <offline-run-dir>'
 ```
 
-Don't hardcode the key in scripts or run logs.
+If an interactive `apptainer exec` isn't available, use a short `srun` allocation.
+
+If sync fails with "No API key configured", ask the user to place their key in a dotfile on the cluster (e.g. `~/.wandb_key`). Don't hardcode the key in scripts or run logs.
+
+### Per-job-block W&B URLs
+
+When a run log has multiple job blocks (original + resumptions), record the synced URL in each job block it belongs to, not only in the W&B section at the bottom. This way you can find the right dashboard from whichever block you're reading without scrolling.
 
 After syncing, review the dashboard with the user and add a `notes` field — a brief qualitative read of how training went. This is subjective and best written together. Examples:
 
@@ -219,6 +225,7 @@ Each experiment run should be on its own git branch or tagged commit so you can 
 - Running experiments without updating the comparison summary — then you lose track of what's been tried
 - Not branching/tagging experiment code — then you can't recover what produced a good result
 - Not recording the W&B synced URL — then you have to hunt through `wandb/` dirs or re-sync to find training curves
+- Putting the synced URL only in the W&B section when there are multiple job blocks — then you can't find it from the block you're reading
 - Naming files `<task>_<date>.md` instead of `<date>_<task>_job-<id>.md` — breaks chronological sorting in file explorers
 - Dumping all run logs flat in `run_logs/` instead of grouping by project — becomes unreadable past ~10 files
 - Only recording ISO timestamps without human-readable dates — forces mental parsing every time you open a file
