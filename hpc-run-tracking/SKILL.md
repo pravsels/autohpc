@@ -77,7 +77,7 @@ Include at minimum:
 ## Config
 - script: `slurm/<script>.sh`
 - config: `configurations/<config>.yaml`
-- dataset: <path on scratch>
+- dataset: `<actual filename>` at `<path on scratch>` (if hosted online, link: `<URL>`)
 - key settings: <whatever matters for this run — learning rate, batch size, resume, etc.>
 
 ## Job
@@ -123,7 +123,10 @@ When the job finishes, fill in **Results**:
 - end_val_loss: `<last logged value or n/a>`
 - loss_one_liner: <one-sentence qualitative summary of the loss progression>
 - checkpoint: `/scratch/.../checkpoints/step_100000.pt`
+- config_snapshot: `<path to resolved config from run output>`
 ```
+
+When archiving a checkpoint, include the exact config snapshot from the run output, not a reference to the repo config file — repo configs are mutable and may not match what actually produced the checkpoint.
 
 The `loss_one_liner` should be a brief human-readable takeaway, not a restatement of numbers. Examples:
 
