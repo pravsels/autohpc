@@ -4,9 +4,7 @@ Reusable HPC workflow docs and skills for local container setup, cluster deploym
 
 ## Quick Start
 
-Paste this to your agent:
-
-> Read ../autohpc/README.md and follow its agent instructions. Apply them to this repo.
+> Read ../autohpc/README.md. Figure out where we are and continue.
 
 ## Repo Layout
 
@@ -40,6 +38,20 @@ The Docker container is the execution environment — for local work **and** for
 
 Keep commit messages short — a few words, not a paragraph. Check `git log` in the target repo and match its style.
 
+### Assessing current phase
+
+When resuming work on a repo, check these signals to determine where you are before doing anything else:
+
+| Signal | Phase |
+|--------|-------|
+| No Dockerfile or broken image build | Phase 1 — local Docker |
+| Dockerfile works but training fails on user's data format | Phase 2 — dataset adaptation |
+| Image works locally, no `slurm/` dir or cluster artifacts | Phase 3 — cluster deployment |
+| `slurm/` scripts exist, no `run_logs/` or empty `run_logs/` | Phase 3 — first submission |
+| `run_logs/` has run logs with results | Ongoing — run tracking |
+
+Report what you find and your best guess to the user (e.g. "Dockerfile exists and builds, slurm scripts are present, run_logs/ has 12 logged runs — looks like you're in the ongoing phase. Sound right?"). Wait for confirmation before continuing — the signals above are heuristics, and the user may know better (e.g. the image builds but is stale, or run_logs exist from a previous attempt that was abandoned).
+
 ### Phase 1 — Local Docker
 
 Read `hpc-container-promotion/SKILL.md` (in this repo) and follow Phase 1 for the target repo. Nothing else.
@@ -69,7 +81,7 @@ The workflow is simple: push code to GitHub, pull on HPC, upload image and data,
 
 Once you start submitting jobs, follow `hpc-run-tracking/SKILL.md` (in this repo) for every run. This is not a one-time setup step — it is an ongoing practice.
 
-- Create a run log in `runs/` when you submit a job.
+- Create a run log in `run_logs/` when you submit a job.
 - Update it when checking status or collecting results.
 - For replication runs, a single log per task is enough.
 - For experiment runs, maintain a comparison summary across variations.
