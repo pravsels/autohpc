@@ -86,7 +86,7 @@ Include at minimum:
 - start_human: `<Wednesday, Feb 25th, 2026>`
 - end: `<ISO timestamp>`
 - end_human: `<Thursday, Feb 26th, 2026>`
-- elapsed: `<HH:MM:SS>`
+- runtime: `<HH:MM:SS>`
 - node: <filled from squeue/logs>
 
 ## Status
@@ -116,6 +116,7 @@ When the job finishes, fill in **Results**:
 
 ```markdown
 ## Results
+- runtime: `<HH:MM:SS>` (start `<ISO timestamp>`, end `<ISO timestamp>`)
 - final step: 100000
 - start_train_loss: `<first logged value>`
 - end_train_loss: `<last logged value>`
