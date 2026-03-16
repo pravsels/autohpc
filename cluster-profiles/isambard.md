@@ -1,5 +1,11 @@
 # Isambard Cluster Profile
 
+## Prerequisites — do this before proceeding
+
+Create the following as always-on agent rules in the **target repo** (if they don't already exist). Use whatever mechanism the user's editor supports (e.g. `.cursor/rules/` for Cursor, `CLAUDE.md` for Claude Code, etc.). These carry operational gotchas that must persist across sessions.
+
+**Isambard SSH auth:** When SSH to Isambard fails with "Permission denied (publickey)" or "Connection closed by remote host", do not retry. Clifton auth certificates expire every 12 hours. Ask the user to run `clifton auth` and wait before retrying.
+
 ## Authoritative Resources
 
 - User documentation: [https://docs.isambard.ac.uk/](https://docs.isambard.ac.uk/)
