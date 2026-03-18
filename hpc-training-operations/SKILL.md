@@ -63,6 +63,15 @@ ssh -o ControlPath="$SSH_CTRL" -O exit "$SSH_ALIAS"          # close when done
 
 ## Writing Sbatch Scripts
 
+**Submission must be just `sbatch script.sh`.** No env vars on the command line. Settings that end up on the `sbatch` line are ephemeral — invisible to reviewers, absent from git history, lost when the terminal closes.
+
+Configuration has two layers — keep them separate:
+
+| Layer | Lives in | Controls | Examples |
+|---|---|---|---|
+| **Infrastructure** | Hardcoded paths at top of `.sh` | Where/how to run | `home_dir`, `scratch_dir`, partition, GPU count, container path |
+| **Experiment** | Config YAML (referenced by `.sh`) | What to run | Model name, dataset, hyperparams, task description, episode index |
+
 A training sbatch script should be short and linear. Before writing one, check the repo for existing slurm scripts and match their style and naming.
 
 **Structure:** SBATCH directives at the top, a few path variables, then one `apptainer exec` (or equivalent container run) command that calls the application entry point. That's it.
@@ -231,6 +240,8 @@ Private repo auth: do not embed PAT in URL.
 - Destructive commands run without confirmation (`scancel`, overwrite sync)
 - Host/path assumptions are unverified (`~/...` vs `/scratch/...`)
 - You are writing a shell script instead of running a command directly
+- Submission requires env vars or flags on the `sbatch` command line
+- Experiment parameters (model, dataset, hyperparams) live as shell vars in the `.sh` instead of a config YAML
 
 ## Common Mistakes
 
@@ -249,6 +260,7 @@ Private repo auth: do not embed PAT in URL.
 - Resolving config paths from `SCRIPT_DIR` / `$(dirname $0)` — Slurm copies scripts to spool, so these point to the wrong place
 - Overwriting `LD_LIBRARY_PATH` instead of appending — removes Apptainer's injected NVIDIA driver libs
 - Using `--export` env overrides or rsync to change config on the cluster instead of committing and pushing through git
+- Requiring env vars on the `sbatch` line — settings belong in the script or config YAML, not the submit command
 - Forgetting `module load` for the container runtime (check cluster profile)
 - Monitoring wrong user (`squeue -u`) due hardcoded shortname
 - Using container paths not mounted in `apptainer exec --bind`

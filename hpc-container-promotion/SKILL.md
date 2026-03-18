@@ -26,7 +26,7 @@ If docs imply this skill is stale, propose a patch and ask for approval before c
 
 ## Phase 1 — Local Docker build and test (do this first)
 
-Do **not** skip ahead to Phase 3. Do **not** plan for cluster deployment, ask about target clusters, or parameterize SSH/remote paths yet.
+Do **not** skip ahead to Phase 3. Do **not** plan for cluster deployment, ask about target clusters, or parameterize SSH/remote paths yet — **except** for architecture compatibility (see step 3 below). Choosing an amd64-only base image or pinning x86-only package versions in Phase 1 means redoing the entire Dockerfile in Phase 3. Verify multi-arch support now.
 
 Docker scripts and the Dockerfile go in `docker/` in the target repo.
 
@@ -35,13 +35,27 @@ Docker scripts and the Dockerfile go in `docker/` in the target repo.
 3. Before building, check the Dockerfile's `FROM` base image includes CUDA/GPU support (e.g. `nvidia/cuda:*`, `pytorch/pytorch:*-cuda*`). A CPU-only base will waste the entire build. To choose the right base image:
    - Check the repo's dependency files (`requirements.txt`, `conda_env.yaml`, `pyproject.toml`) for pinned `torch` and CUDA versions.
    - Check local CUDA support (`nvidia-smi`) — the base image's CUDA version must not exceed the driver's supported version.
-   - Check the target cluster's architecture (e.g. `uname -m` via SSH). Prefer a multi-arch base image (`docker manifest inspect`) that supports both local and cluster architectures so you don't have to rebuild later.
-   - Pick a base image that satisfies all three constraints.
+   - **The base image must support both local and cluster architectures.** Run `docker manifest inspect <image>` and confirm it lists manifests for both (e.g. `amd64` and `arm64`). This is not optional — an architecture-specific base image (e.g. `pytorch/pytorch:*` which is x86-only) will force a full Dockerfile rewrite in Phase 3. Use `nvidia/cuda:*` base images which are multi-arch.
+   - **Verify pinned package versions have wheels for both architectures.** Check the PyTorch wheel index (e.g. `https://download.pytorch.org/whl/cu128/torch/`) for aarch64 wheels at the pinned version. If a pinned version lacks arm64 wheels, pick the nearest version that has them and note the override. Do this for torch, torchvision, and any other large compiled dependency.
+   - Pick a base image and package versions that satisfy all constraints.
    - Verify the image tag actually exists (`docker pull`) before writing the Dockerfile.
 4. The Dockerfile must install **all** runtime dependencies (use `requirements.txt`, `conda_env.yaml`, or equivalent from the repo). The image must be able to run the application, not just import the package.
 5. Build the Docker image.
-5. Smoke test inside the container. A smoke test means running the actual application workflows that will run on the HPC — inference with provided weights, or a short training run on a small batch. The point is to verify the exact flow that will execute on the cluster. It does **not** mean `python -V` or a bare import check.
+5. Smoke test inside the container. Open a shell in the container (`./docker/run_script.sh` or `docker run --rm --gpus all -it <image> bash`) and run the Python command directly. Do **not** create smoke test wrapper scripts — they add nothing over typing the command yourself. A smoke test means running the actual application workflows that will run on the HPC — inference with provided weights, or a short training run on a small batch. It does **not** mean `python -V` or a bare import check.
 6. Do not proceed to Phase 3 until the image builds and smoke tests pass.
+
+### Docker Build Script Conventions
+
+When the repo has `docker/build_docker.sh`, it must support explicit platform selection:
+
+- **Accept a platform argument.** Default to the current host architecture (detect it, don't hardcode), but allow overriding for cross-builds.
+- **Tag images with the platform** so different architectures don't overwrite each other. Default the image tag to the platform name.
+- **Use `docker buildx` for cross-architecture builds.** Plain `docker build` only targets the host. For non-host platforms, use `docker buildx build --platform linux/<arch> --load`.
+
+```bash
+./docker/build_docker.sh          # detects host arch
+./docker/build_docker.sh arm64    # cross-build for cluster
+```
 
 ### Phase 1 Quick Reference
 
@@ -110,9 +124,14 @@ The deployment workflow:
 - Uploading a Docker tar without checking if the cluster even runs Docker — read the cluster profile for the container runtime first
 - Reusing mutable tags (`latest`) so runs are not reproducible
 - Treating `python -V` or a bare import as a smoke test — run real application workflows
+- Creating smoke test shell scripts — just run the command in the container shell
 - Skipping local smoke tests before conversion
 - Building an image without installing all runtime dependencies from the repo
 - Ignoring repo-provided `docker/` wrappers and rebuilding ad-hoc
+- Building without explicit platform selection — silently produces wrong architecture for the target cluster
+- Using the same image tag for different architectures — overwrites and causes silent failures
+- Choosing an x86-only base image in Phase 1 (e.g. `pytorch/pytorch:*`) then discovering it has no arm64 manifest in Phase 3 — check `docker manifest inspect` upfront
+- Pinning package versions without checking arm64 wheel availability — wastes hours on a build that fails at `pip install`
 - Uploading to `~/...` when job scripts expect `/scratch/...`
 - Hardcoding old aliases/usernames in remote paths
 - Inlining secrets for private pulls instead of secure auth flow

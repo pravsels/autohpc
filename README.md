@@ -18,6 +18,8 @@ Reusable HPC workflow docs and skills for local container setup, cluster deploym
   - Adapting code to read the user's dataset format without converting data.
 - `hpc-run-tracking/SKILL.md`
   - Maintaining per-run logs for submitted jobs: config, status, results, next steps.
+- `eval-tracking/SKILL.md`
+  - Maintaining per-eval logs for checkpoint evaluations: provenance, metrics, qualitative assessment, verdict.
 - `cluster-profiles/`
   - One file per cluster with docs links and cluster-specific notes.
 
