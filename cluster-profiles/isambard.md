@@ -58,6 +58,12 @@ module load brics/apptainer-multi-node
 - Partition: `workq`.
 - Max walltime: 1 day (`--time=1-00:00:00`). Jobs that hit the limit are killed — checkpoint frequently and support resume.
 
+### Full-node GPU jobs
+
+To use all 4 GPUs on a node, you **must** use `#SBATCH --mem=0G` (request all memory) and `#SBATCH --exclusive`. You cannot access all GPUs without requesting all the node's memory.
+
+**Do not set `CUDA_VISIBLE_DEVICES` or `NVIDIA_VISIBLE_DEVICES`** in sbatch scripts. Slurm assigns devices automatically — manually overriding conflicts with the scheduler and can silently restrict which GPUs the job sees.
+
 ### Debugging (use `srun`, not sbatch scripts)
 
 ```bash
