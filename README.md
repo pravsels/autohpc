@@ -1,10 +1,16 @@
-# autoHPC
+# AutoHPC
 
-Reusable HPC workflow docs and skills for local container setup, cluster deployment, and Slurm job operations.
+Take any AI / ML repo from local Docker build to HPC training and eval — with an AI agent doing the work.
 
 ## Quick Start
 
-> Read ../autohpc/README.md. Figure out where we are and continue.
+Clone this repo alongside your target ML repo, then paste this prompt into your AI coding agent:
+
+```
+Read ../autohpc/README.md. Assess the current phase (see phase table), confirm with user, then follow the matching skill.
+```
+
+Adjust the path if your clone location differs.
 
 ## Repo Layout
 
@@ -51,6 +57,7 @@ When resuming work on a repo, check these signals to determine where you are bef
 | Image works locally, no `slurm/` dir or cluster artifacts | Phase 3 — cluster deployment |
 | `slurm/` scripts exist, no `run_logs/` or empty `run_logs/` | Phase 3 — first submission |
 | `run_logs/` has run logs with results | Ongoing — run tracking |
+| `eval_logs/` has eval logs with metrics | Ongoing — eval tracking |
 
 Report what you find and your best guess to the user (e.g. "Dockerfile exists and builds, slurm scripts are present, run_logs/ has 12 logged runs — looks like you're in the ongoing phase. Sound right?"). Wait for confirmation before continuing — the signals above are heuristics, and the user may know better (e.g. the image builds but is stale, or run_logs exist from a previous attempt that was abandoned).
 
@@ -79,7 +86,7 @@ The workflow is simple: push code to GitHub, pull on HPC, upload image and data,
 3. Follow `hpc-training-operations/SKILL.md` (in this repo) to write sbatch scripts and submit jobs.
 4. The only scripts you should create in the target repo's `slurm/` are training and eval sbatch scripts. Nothing else.
 
-### Ongoing — Run tracking
+### Ongoing — Run and eval tracking
 
 Once you start submitting jobs, follow `hpc-run-tracking/SKILL.md` (in this repo) for every run. This is not a one-time setup step — it is an ongoing practice.
 
@@ -88,7 +95,10 @@ Once you start submitting jobs, follow `hpc-run-tracking/SKILL.md` (in this repo
 - For replication runs, a single log per task is enough.
 - For experiment runs, maintain a comparison summary across variations.
 
-Read `hpc-run-tracking/SKILL.md` for the full format and workflow.
+When evaluating checkpoints, follow `eval-tracking/SKILL.md` (in this repo) for every eval.
+
+- Create an eval log in `eval_logs/` for each evaluation.
+- Record provenance (which checkpoint, which data), metrics, qualitative assessment, and verdict.
 
 ## Inspiration
 
