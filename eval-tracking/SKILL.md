@@ -29,7 +29,7 @@ Same convention as run logs — use subdirectories when there are distinct compo
 eval_logs/
   encoder/
     timeline.md
-    2026-03-16_recon_quality_job-2875100.md
+    2026-03-16_recon_quality.md
     ...
   decoder/
     timeline.md
@@ -38,7 +38,7 @@ eval_logs/
 
 ### Creating an eval log
 
-Create the file when you submit the eval job. Same naming convention as run logs: `<date>_<task>_job-<jobid>.md`.
+Create the file when you submit the eval job. Same naming convention as run logs: `<date>_<task>.md`. Job IDs go inside the file, not in the filename.
 
 Include at minimum:
 

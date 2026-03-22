@@ -36,8 +36,8 @@ When a repo has multiple components that get trained independently (e.g. encoder
 run_logs/
   encoder/
     timeline.md
-    2026-02-20_train_job-2416104.md
-    2026-02-21_train_job-2431167.md
+    2026-02-20_train.md
+    2026-02-21_train.md
     ...
   decoder/
     timeline.md
@@ -54,16 +54,16 @@ Each subdirectory gets a `timeline.md` — a chronological index of all runs in 
 ```markdown
 # Encoder Timeline
 
-1. `2026-02-20_train_job-2416104.md` — Friday, Feb 20th
-2. `2026-02-21_train_job-2431167.md` — Saturday, Feb 21st
-3. `2026-02-25_eval_job-2482022.md` — Wednesday, Feb 25th
+1. `2026-02-20_train.md` — Friday, Feb 20th
+2. `2026-02-21_train.md` — Saturday, Feb 21st
+3. `2026-02-25_eval.md` — Wednesday, Feb 25th
 ```
 
 ### Creating a run log
 
-Create the file when you submit the job. Name it `<date>_<task>_job-<jobid>.md` — date-prefix ensures chronological sorting in the file explorer, and including the Slurm job ID makes cross-referencing with `slurm-*.out` immediate.
+Create the file when you submit the job. Name it `<date>_<task>.md` — date-prefix ensures chronological sorting in the file explorer. Job IDs go inside the file, not in the filename, since they change on every resubmit.
 
-Examples: `2026-03-11_train_front_cam_job-2536279.md`, `2026-03-15_eval_job-2668095.md`.
+Examples: `2026-03-11_train_front_cam.md`, `2026-03-15_eval.md`.
 
 Include at minimum:
 
@@ -230,7 +230,7 @@ Each experiment run should be on its own git branch or tagged commit so you can 
 - Not branching/tagging experiment code — then you can't recover what produced a good result
 - Not recording the W&B synced URL — then you have to hunt through `wandb/` dirs or re-sync to find training curves
 - Putting the synced URL only in the W&B section when there are multiple job blocks — then you can't find it from the block you're reading
-- Naming files `<task>_<date>.md` instead of `<date>_<task>_job-<id>.md` — breaks chronological sorting in file explorers
+- Naming files `<task>_<date>.md` instead of `<date>_<task>.md` — breaks chronological sorting in file explorers
 - Dumping all run logs flat in `run_logs/` instead of grouping by project — becomes unreadable past ~10 files
 - Only recording ISO timestamps without human-readable dates — forces mental parsing every time you open a file
 - Not maintaining `timeline.md` per subdirectory — then you have to open individual files to reconstruct order
