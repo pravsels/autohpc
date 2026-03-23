@@ -30,29 +30,25 @@ Run logs live in `run_logs/` in the target repo. One markdown file per run.
 
 ### Directory structure
 
-When a repo has multiple components that get trained independently (e.g. encoder, decoder, dynamics model, classifier), or distinct pipeline stages, group run logs into subdirectories. Discuss the grouping with the user — the right split depends on the project. Some examples:
+Group run logs into subdirectories when there are distinct groupings — by component (encoder, decoder), by task variant (arx5_multitask, libero_subtask), or by pipeline stage. Discuss the grouping with the user — the right split depends on the project. Create subdirs proactively when you know variants are coming, don't wait for the flat list to get messy.
 
 ```
 run_logs/
-  encoder/
+  arx5_multitask/
     timeline.md
-    2026-02-20_train.md
-    2026-02-21_train.md
+    2026-03-22_train.md
     ...
-  decoder/
-    timeline.md
-    ...
-  pipeline/
+  libero_subtask/
     timeline.md
     ...
 ```
 
-For simpler repos with a single training target, a flat `run_logs/` is fine — add subdirectories when the flat list grows past ~10 files or when there are clearly distinct components.
+For simpler repos with a single training target, a flat `run_logs/` is fine.
 
-Each subdirectory gets a `timeline.md` — a chronological index of all runs in that group with human-readable dates:
+Each subdirectory gets a `timeline.md` — a chronological index of all runs in that group with human-readable dates. The timeline header should match the subdirectory:
 
 ```markdown
-# Encoder Timeline
+# ARX5 Multitask Timeline
 
 1. `2026-02-20_train.md` — Friday, Feb 20th
 2. `2026-02-21_train.md` — Saturday, Feb 21st

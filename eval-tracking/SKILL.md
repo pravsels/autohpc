@@ -23,15 +23,15 @@ Eval logs live in `eval_logs/` in the target repo, parallel to `run_logs/`. One 
 
 ### Directory structure
 
-Same convention as run logs — use subdirectories when there are distinct components, flat when simple. Each subdirectory gets a `timeline.md` with human-readable dates.
+Same convention as run logs — group into subdirectories by component, task variant, or pipeline stage. Create subdirs proactively when you know variants are coming. Each subdirectory gets a `timeline.md` with a header matching the subdirectory and human-readable dates.
 
 ```
 eval_logs/
-  encoder/
+  arx5_multitask/
     timeline.md
     2026-03-16_recon_quality.md
     ...
-  decoder/
+  libero_subtask/
     timeline.md
     ...
 ```
