@@ -215,6 +215,61 @@ Before submitting a new experiment, read `run_logs/experiments.md` and recent ru
 
 Each experiment run should be on its own git branch or tagged commit so you can recover the exact code that produced a given result.
 
+## Publishing Checkpoints
+
+When checkpoints are worth sharing or backing up, upload to HuggingFace. Confirm with the user whether to upload params only (sufficient for inference and fine-tuning) or the full checkpoint including train state (needed to resume training, but 2-3x larger).
+
+### What to include
+
+The repo should contain everything needed to use the checkpoint, and ideally enough to replicate the training:
+
+- **Inference:** model weights (params) + assets needed at load time (e.g. norm stats). Someone should be able to download and run inference without anything else.
+- **Replication:** dataset list, valid indices, training config — enough to reproduce the run from scratch.
+- **Resuming training:** full checkpoint including optimizer/EMA state. Much larger, so confirm with the user whether this is needed.
+
+```
+README.md                    # Model card: description, config, loss table, hashes, usage
+TRAINING_LOG.md              # Sanitized run log (see below)
+assets/                      # Norm stats, dataset list, valid indices, etc.
+checkpoints/<step>/params/   # Model weights (inference + fine-tuning)
+checkpoints/<step>/train_state/  # Optional: optimizer/EMA state (resume training)
+```
+
+### Sanitized training log
+
+Create `TRAINING_LOG.md` from the run log, stripped of cluster-specific details: Slurm job IDs, node names, scratch paths, `wandb_id.txt` references. Keep the training dynamics, config, loss progression, and W&B link.
+
+### Checkpoint hashes
+
+Hash each checkpoint so users can verify integrity. Use a single hash per checkpoint:
+
+```bash
+tar cf - -C checkpoints/<step> params | sha256sum
+```
+
+Include the hashes in the README alongside the loss at each step, and document how to reproduce them.
+
+### W&B visibility
+
+If the main W&B project is private but you want to share training curves, sync the run to a separate public project:
+
+```bash
+wandb sync --project <public-project-name> <offline-run-dir>
+```
+
+Then set the project to public in the W&B UI. Link this public URL in the README, not the private project URL.
+
+### Recording in the run log
+
+After uploading, add a `## HuggingFace` section to the run log:
+
+```markdown
+## HuggingFace
+- repo: https://huggingface.co/<user>/<repo>
+- uploaded checkpoints: <which steps, params only or full>
+- includes: <what else — README, TRAINING_LOG, assets, etc.>
+```
+
 ## Common Mistakes
 
 - Not creating a run log — then you forget what config produced which checkpoint
