@@ -61,6 +61,26 @@ ssh -o ControlPath="$SSH_CTRL" -O exit "$SSH_ALIAS"          # close when done
 7. Never inline secrets; use hidden prompt input or secure env handling.
 8. Enable observability: live logs, job accounting, and required W&B tracking.
 
+### Worktrees for multi-experiment setups
+
+When the user is running multiple experiments from the same repo — different configs, different datasets, different branches — suggest using git worktrees on the HPC. Each worktree gives the experiment its own directory, which keeps things cleanly separated:
+
+- **Uncommitted config edits stay isolated.** Slurm scripts often need per-worktree changes (e.g. `repo_dir` pointing to the worktree path) that you don't want to commit. These stay in their worktree without affecting others.
+- **Slurm logs don't mix.** Each job's `slurm-<job_id>.out` and `.err` files land in the worktree that submitted them, not in a shared directory with dozens of other experiments' logs.
+- **Checkpoints, assets, and caches are naturally separated.** Each worktree can point to its own scratch subdirectory.
+
+Create worktrees from the main repo clone on the HPC:
+
+```bash
+cd /home/<project_code>/<username>/<project>
+git fetch origin <branch>
+git worktree add ../<project>_<experiment> origin/<branch>
+cd ../<project>_<experiment>
+git checkout -b <branch> origin/<branch>   # avoid detached HEAD
+```
+
+This isn't always needed — a single clone is fine for one-at-a-time runs. Suggest worktrees when you see the user setting up parallel experiments or when slurm logs and uncommitted edits would start colliding.
+
 ## Writing Sbatch Scripts
 
 **Submission must be just `sbatch script.sh`.** No env vars on the command line. Settings that end up on the `sbatch` line are ephemeral — invisible to reviewers, absent from git history, lost when the terminal closes.
