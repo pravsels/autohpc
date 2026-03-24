@@ -99,7 +99,7 @@ Include at minimum:
 
 ### Updating a run log
 
-When checking on a job (via `squeue`, log tailing, or `sacct`), append to the **Status** section:
+When checking on a job, verify it is actually making progress — not just running. `squeue` showing RUNNING and GPU activity in `nvidia-smi` are not sufficient; a job can be alive but deadlocked. Follow the training health checks in `hpc-training-operations` to confirm steps are advancing in the output log and no errors are present in the error log before recording status. Append to the **Status** section:
 
 ```markdown
 ## Status
@@ -220,6 +220,7 @@ Each experiment run should be on its own git branch or tagged commit so you can 
 - Not creating a run log — then you forget what config produced which checkpoint
 - Creating a new file for every resumption of the same run
 - Logging status without the step count or loss — timestamps alone aren't useful
+- Logging "running" based on `squeue` or GPU activity without checking the output log — a job can be alive but stuck; always verify steps are advancing before recording a healthy status
 - Forgetting to record the checkpoint path in results — makes resumption a guessing game
 - Not recording run_type (replication vs experiment vs pipeline) — makes intent unclear when reviewing later
 - Running experiments without updating the comparison summary — then you lose track of what's been tried

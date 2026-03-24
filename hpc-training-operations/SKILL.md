@@ -227,8 +227,22 @@ Private repo auth: do not embed PAT in URL.
 
 ## Observability Guidance
 
-- Minimum visibility: queue status (`squeue`), job logs (`slurm-<job_id>.out/.err`), and GPU telemetry (`nvidia-smi`).
-- Post-run visibility: capture `sacct`/`seff` summaries for memory, runtime, and exit status.
+### Training health checks
+
+**Queue status and GPU usage are not sufficient to verify training is healthy.** A job can show `RUNNING` in `squeue` and have active GPU memory in `nvidia-smi` while being completely stuck — deadlocked on I/O, hung on a collective, or spinning in an infinite retry loop. You must check the actual training output.
+
+When monitoring a running job, check in this order:
+
+1. **`slurm-<job_id>.out` — is the training loop advancing?** Tail the output log and look for step counts and loss values. If steps are advancing and loss is being logged, training is alive. If the last logged step was hours ago, training is stuck.
+2. **`slurm-<job_id>.err` — any errors or warnings?** Check for disk full errors, NCCL timeouts, OOM messages, checkpoint I/O failures, or lock acquisition warnings. Errors here can indicate a job that's alive but not making progress.
+3. **Disk usage — is there room for checkpoints?** A full filesystem silently deadlocks checkpoint writes. The training loop may continue computing steps but hang when the checkpoint thread blocks on disk I/O. Check usage with `du -sh <checkpoint_dir>` and compare against the filesystem's quota (see cluster profile for quota commands).
+4. **GPU telemetry — is the GPU doing work?** `nvidia-smi` confirms the GPU is allocated and has processes, but doesn't distinguish productive training from a deadlocked process holding GPU memory. Only useful as a first sanity check, not as proof of progress.
+
+A healthy training job shows: recent step numbers in `.out`, no errors in `.err`, disk not near quota, and GPU utilization >0%. All four must be true.
+
+### Post-run accounting
+
+- Capture `sacct`/`seff` summaries for memory, runtime, and exit status.
 - W&B tracking is required for training runs.
 - Prefer offline-first logging on restricted clusters, then sync later.
 - Never inline `WANDB_API_KEY`; pass via secure environment setup.
@@ -264,5 +278,6 @@ Private repo auth: do not embed PAT in URL.
 - Forgetting `module load` for the container runtime (check cluster profile)
 - Monitoring wrong user (`squeue -u`) due hardcoded shortname
 - Using container paths not mounted in `apptainer exec --bind`
-- Relying only on queue state without tailing logs or collecting post-run accounting
+- Treating `squeue` RUNNING status or `nvidia-smi` GPU activity as proof that training is healthy — a job can be alive and holding GPU memory while deadlocked on I/O, stuck on a collective, or spinning without advancing steps; always check the `.out` log for advancing step counts
+- Not checking disk usage before or during training — a full filesystem silently deadlocks checkpoint writes, which can hang the training loop for hours until walltime kills the job
 - Running training without W&B tracking/sync and losing experiment visibility
