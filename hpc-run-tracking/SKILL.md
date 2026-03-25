@@ -241,11 +241,15 @@ Create `TRAINING_LOG.md` from the run log, stripped of cluster-specific details:
 
 ### Checkpoint hashes
 
-Hash each checkpoint so users can verify integrity. Use a single hash per checkpoint:
+Hash each checkpoint so users can verify integrity after download. Hash each file individually (capturing path and content), then hash the manifest:
 
 ```bash
-tar cf - -C checkpoints/<step> params | sha256sum
+cd checkpoints/<step> && find params -type f | sort | xargs sha256sum | sha256sum
 ```
+
+This is deterministic across runs and machines — each file's path and content contribute independently, so renamed files, empty files, and different file boundaries all produce different hashes. Do not use `tar | sha256sum` (non-deterministic due to metadata) or plain `cat` concatenation (loses file boundaries).
+
+Always run the hash command twice and confirm the output matches before recording it. If it differs between runs, the method is not deterministic and should not be used.
 
 Include the hashes in the README alongside the loss at each step, and document how to reproduce them.
 
