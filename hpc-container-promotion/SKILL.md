@@ -40,7 +40,7 @@ Docker scripts and the Dockerfile go in `docker/` in the target repo.
    - Pick a base image and package versions that satisfy all constraints.
    - Verify the image tag actually exists (`docker pull`) before writing the Dockerfile.
 4. The Dockerfile must install **all** runtime dependencies (use `requirements.txt`, `conda_env.yaml`, or equivalent from the repo). The image must be able to run the application, not just import the package.
-5. Build the Docker image.
+5. Build the Docker image. Use `--network host` to avoid DNS resolution failures inside the build container (see "Docker build networking" below).
 5. Smoke test inside the container. Open a shell in the container (`./docker/run_script.sh` or `docker run --rm --gpus all -it <image> bash`) and run the Python command directly. Do **not** create smoke test wrapper scripts — they add nothing over typing the command yourself. A smoke test means running the actual application workflows that will run on the HPC — inference with provided weights, or a short training run on a small batch. It does **not** mean `python -V` or a bare import check.
 6. Do not proceed to Phase 3 until the image builds and smoke tests pass.
 
@@ -56,6 +56,14 @@ When the repo has `docker/build_docker.sh`, it must support explicit platform se
 ./docker/build_docker.sh          # detects host arch
 ./docker/build_docker.sh arm64    # cross-build for cluster
 ```
+
+### Docker build networking
+
+Docker builds run in an isolated network namespace by default. DNS resolution frequently fails inside build containers, causing `apt-get update` to produce `Temporary failure resolving` errors. Every subsequent package install then fails with "unable to locate package" — but the root cause is DNS, not missing packages.
+
+Fix: always pass `--network host` to `docker build` / `docker buildx build`. Build scripts should default to this (overridable via `DOCKER_BUILD_NETWORK` env var).
+
+When diagnosing a failed build, look for `Temporary failure resolving` in the `apt-get update` output before investigating package-level errors — the package errors are just fallout from missing indexes.
 
 ### Phase 1 Quick Reference
 
@@ -128,6 +136,7 @@ The deployment workflow:
 - Skipping local smoke tests before conversion
 - Building an image without installing all runtime dependencies from the repo
 - Ignoring repo-provided `docker/` wrappers and rebuilding ad-hoc
+- Building without `--network host` — DNS fails silently in the default Docker network, producing misleading "unable to locate package" errors that are actually DNS resolution failures
 - Building without explicit platform selection — silently produces wrong architecture for the target cluster
 - Using the same image tag for different architectures — overwrites and causes silent failures
 - Choosing an x86-only base image in Phase 1 (e.g. `pytorch/pytorch:*`) then discovering it has no arm64 manifest in Phase 3 — check `docker manifest inspect` upfront
