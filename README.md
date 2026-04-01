@@ -26,6 +26,8 @@ Adjust the path if your clone location differs.
   - Maintaining per-run logs for submitted jobs: config, status, results, next steps.
 - `eval-tracking/SKILL.md`
   - Maintaining per-eval logs for checkpoint evaluations: provenance, metrics, qualitative assessment, verdict.
+- `autoresearch/`
+  - Git submodule for autonomous post-baseline experiment loops once replication runs and evals are stable.
 - `cluster-profiles/`
   - One file per cluster with docs links and cluster-specific notes.
 
@@ -59,7 +61,7 @@ When resuming work on a repo, check these signals to determine where you are bef
 | `run_logs/` has run logs with results | Ongoing — run tracking |
 | `eval_logs/` has eval logs with metrics | Ongoing — eval tracking |
 
-Report what you find and your best guess to the user (e.g. "Dockerfile exists and builds, slurm scripts are present, run_logs/ has 12 logged runs — looks like you're in the ongoing phase. Sound right?"). Wait for confirmation before continuing — the signals above are heuristics, and the user may know better (e.g. the image builds but is stale, or run_logs exist from a previous attempt that was abandoned).
+Report what you find and your best guess to the user (e.g. "Dockerfile exists and builds, slurm scripts are present, run_logs/ has 12 logged runs — looks like you're in the ongoing phase. Are you still focused on replication baselines, or are you now in experimentation mode?"). Wait for confirmation before continuing — the signals above are heuristics, and the user may know better (e.g. the image builds but is stale, run_logs exist from a previous attempt that was abandoned, or experiment logs exist even though the current goal is still baseline replication).
 
 ### Phase 1 — Local Docker
 
@@ -99,6 +101,16 @@ When evaluating checkpoints, follow `eval-tracking/SKILL.md` (in this repo) for 
 
 - Create an eval log in `eval_logs/` for each evaluation.
 - Record provenance (which checkpoint, which data), metrics, qualitative assessment, and verdict.
+
+### After replication baselines are stable
+
+Once replication training runs and checkpoint evals are working end-to-end, you can use the `autoresearch/` submodule to branch into experiment-driven work.
+
+Treat this as a second phase after baseline reproduction: first make sure the original training setup is reproducible and the eval loop is trustworthy, then use `autoresearch` to run controlled variations and compare different ideas.
+
+That split keeps replication and experimentation separate: use this repo's run and eval tracking to establish the baseline, then use `autoresearch` to drive higher-variance research experiments on top of that foundation.
+
+Even in ongoing work, do not infer experimentation mode from files alone. Confirm with the user whether the current objective is still replication or whether they want to switch into experiment exploration.
 
 ## Inspiration
 
