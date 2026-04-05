@@ -71,19 +71,19 @@ Include at minimum:
 - objective: <one line — what this run is trying to verify or test>
 
 ## Config
-- script: `slurm/<script>.sh`
+- script: `slurm/<script>.sh` or `docker run` command
 - config: `configurations/<config>.yaml`
-- dataset: `<actual filename>` at `<path on scratch>` (if hosted online, link: `<URL>`)
+- dataset: `<actual filename>` at `<path>` (if hosted online, link: `<URL>`)
 - key settings: <whatever matters for this run — learning rate, batch size, resume, etc.>
 
 ## Job
-- job_id: <filled after sbatch>
+- execution_id: <Slurm job_id, or instance_name/zone for cloud VMs>
 - submitted/start: `<ISO timestamp>`
 - start_human: `<Wednesday, Feb 25th, 2026>`
 - end: `<ISO timestamp>`
 - end_human: `<Thursday, Feb 26th, 2026>`
 - runtime: `<HH:MM:SS>`
-- node: <filled from squeue/logs>
+- node: <from squeue/logs> (Slurm only — for cloud VMs the instance is already in execution_id)
 
 ## Status
 
@@ -99,7 +99,7 @@ Include at minimum:
 
 ### Updating a run log
 
-When checking on a job, verify it is actually making progress — not just running. `squeue` showing RUNNING and GPU activity in `nvidia-smi` are not sufficient; a job can be alive but deadlocked. Follow the training health checks in `hpc-training-operations` to confirm steps are advancing in the output log and no errors are present in the error log before recording status. Append to the **Status** section:
+When checking on a job, verify it is actually making progress — not just running. A running process with GPU activity can still be deadlocked. Check the training output log for advancing step counts and the error log for failures before recording status. On Slurm, check `slurm-<job_id>.out` and `.err`. On cloud VMs, check the persisted log file (e.g. `train.log`) or `docker logs`. Append to the **Status** section:
 
 ```markdown
 ## Status
@@ -119,7 +119,7 @@ When the job finishes, fill in **Results**:
 - start_val_loss: `<first logged value or n/a>`
 - end_val_loss: `<last logged value or n/a>`
 - loss_one_liner: <one-sentence qualitative summary of the loss progression>
-- checkpoint: `/scratch/.../checkpoints/step_100000.pt`
+- checkpoint: `<path to checkpoint on remote storage>`
 - config_snapshot: `<path to resolved config from run output>`
 ```
 
@@ -144,18 +144,23 @@ And fill in the **W&B** section. Record the local offline dir immediately, then 
 
 The synced link is a clickable URL to the W&B dashboard where training dynamics (loss curves, metrics, system stats) can be inspected. If not yet synced, leave it as `pending — run wandb sync <local>`.
 
-### W&B sync on HPC
+### W&B sync
 
-On HPC, `wandb` typically isn't installed on the host. Run `wandb sync` inside the container:
+`wandb` is typically not installed on the host. Run `wandb sync` inside the container:
 
 ```bash
+# Slurm / Apptainer
 apptainer exec --bind /scratch/... <container.sif> bash -lc \
   'export WANDB_API_KEY="$(cat ~/.wandb_key)"; wandb sync <offline-run-dir>'
+
+# Cloud VM / Docker
+docker run --rm --network=host \
+  -e WANDB_API_KEY="$(cat ~/.wandb_key)" \
+  -v /path/to/repo:/workspace/repo \
+  <image>:<tag> wandb sync /workspace/repo/wandb/<offline-run-dir>
 ```
 
-If an interactive `apptainer exec` isn't available, use a short `srun` allocation.
-
-If sync fails with "No API key configured", ask the user to place their key in a dotfile on the cluster (e.g. `~/.wandb_key`). Don't hardcode the key in scripts or run logs.
+If sync fails with "No API key configured", ask the user to place their key in a dotfile (e.g. `~/.wandb_key`). Don't hardcode the key in scripts or run logs.
 
 ### Per-job-block W&B URLs
 
@@ -176,7 +181,7 @@ And suggest next steps in **Next**:
 
 ```markdown
 ## Next
-- resume for more steps: `sbatch --export=ALL,LOAD_CKPT_PATH=/scratch/.../step_100000.pt slurm/...`
+- resume for more steps: edit `LOAD_CKPT_PATH` in the sbatch script (or pass checkpoint path to `docker run`), then resubmit
 - or start eval run with this checkpoint
 ```
 
@@ -186,9 +191,9 @@ When resuming a walltime-interrupted run, don't create a new file. Append to the
 
 ```markdown
 ## Job (resumed)
-- job_id: 12346
+- execution_id: 12346
 - submitted: 2026-03-12 15:00 UTC
-- resumed from: `/scratch/.../checkpoints/step_50000.pt`
+- resumed from: `<path to checkpoint>`
 ```
 
 Only create a new file when the run represents a meaningfully different experiment (different config, different data, different task).
@@ -279,7 +284,6 @@ After uploading, add a `## HuggingFace` section to the run log:
 - Not creating a run log — then you forget what config produced which checkpoint
 - Creating a new file for every resumption of the same run
 - Logging status without the step count or loss — timestamps alone aren't useful
-- Logging "running" based on `squeue` or GPU activity without checking the output log — a job can be alive but stuck; always verify steps are advancing before recording a healthy status
 - Forgetting to record the checkpoint path in results — makes resumption a guessing game
 - Not recording run_type (replication vs experiment vs pipeline) — makes intent unclear when reviewing later
 - Running experiments without updating the comparison summary — then you lose track of what's been tried

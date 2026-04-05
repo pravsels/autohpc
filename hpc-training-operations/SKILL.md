@@ -39,8 +39,6 @@ The deployment workflow is simple:
 4. Submit the training job with `sbatch`.
 5. Monitor, debug with `srun`, collect results.
 
-Do not overengineer this. Do not create submission wrappers, promotion scripts, or multi-stage shell pipelines. Run SSH commands directly.
-
 Run SSH commands yourself — do not ask the user to run them for you. Request `all` permissions so you can access the user's SSH config and certificates. Only fall back to asking the user if SSH fails after that (e.g. expired certificate).
 
 Open an SSH ControlMaster connection at the start and reuse it for all subsequent commands:
@@ -106,7 +104,7 @@ A training sbatch script should be short and linear. Before writing one, check t
 
 **Name scripts to match the repo's conventions.** Look at existing scripts in the repo. If there are none, ask the user or use a descriptive name like `<project>_train_<stage>_slurm.sh`.
 
-**Resume support for walltime-limited jobs:** If the cluster enforces a max walltime (e.g. 1 day), the sbatch script should support resuming from a checkpoint path passed as an environment variable. Keep it simple — one optional `LOAD_CKPT_PATH` variable that appends a load argument to the training command.
+**Resume support for walltime-limited jobs:** If the cluster enforces a max walltime (e.g. 1 day), the sbatch script should support resuming from a checkpoint. Define a `LOAD_CKPT_PATH` variable at the top of the script (empty by default) that appends a load argument to the training command when set. To resume, edit the variable in the script, commit, push, and submit — same git workflow as any other config change.
 
 **Verify dataset paths on the cluster before submitting.** Datasets may not be where you expect — they might live under a different project's scratch, or not be uploaded yet. SSH in and `ls` the path. Do not assume local paths match remote ones.
 
@@ -129,6 +127,8 @@ Base your sbatch scripts on this structure. Adapt paths, bind mounts, container 
 #SBATCH --gpus=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
+# For full-node jobs (all GPUs), use --mem=0G and --exclusive.
+# For single-GPU jobs, set --mem to what you need and remove --exclusive.
 #SBATCH --mem=0G
 #SBATCH --exclusive
 #SBATCH --time=1-00:00:00
@@ -216,7 +216,7 @@ fi
 | Job accounting | `sacct -j <job_id> --format=JobID,State,Elapsed,MaxRSS,ExitCode` |
 | Efficiency summary | `seff <job_id>` |
 | W&B offline sync | `wandb sync <offline_run_dir>` |
-| Interactive debug shell | `srun --nodes=1 --gres=gpu:1 --time=00:30:00 --pty /bin/bash` |
+| Interactive debug shell | `srun --gpus=1 --time=00:30:00 --pty /bin/bash` |
 | Scratch usage | `du -sh <scratch_dir>` and `du -h --max-depth=1 <scratch_dir> \| sort -hr` |
 
 ## Implementation Example
@@ -232,8 +232,8 @@ export SCRATCH_DIR="/scratch/${PROJECT_CODE}/${UNIX_USER}/${PROJECT_NAME}"
 # 1. Pull latest code on HPC
 ssh "$SSH_ALIAS" "cd $PROJECT_DIR && git pull"
 
-# 2. Upload container image (already built locally)
-rsync -avP <image>.tar "$SSH_ALIAS:$SCRATCH_DIR/"
+# 2. Upload container artifact (already built/converted locally)
+rsync -avP <image>.sif "$SSH_ALIAS:$SCRATCH_DIR/"
 
 # 3. Submit training
 ssh "$SSH_ALIAS" "cd $PROJECT_DIR && sbatch slurm/<training_script>.sh"
@@ -267,37 +267,19 @@ A healthy training job shows: recent step numbers in `.out`, no errors in `.err`
 - Prefer offline-first logging on restricted clusters, then sync later.
 - Never inline `WANDB_API_KEY`; pass via secure environment setup.
 
-## Red Flags - Stop and Re-check
-
-- Commands contain hardcoded user handles, project IDs, or old job IDs
-- Any secret appears inline (`PAT`, `WANDB_API_KEY`, tokenized git URL)
-- Destructive commands run without confirmation (`scancel`, overwrite sync)
-- Host/path assumptions are unverified (`~/...` vs `/scratch/...`)
-- You are writing a shell script instead of running a command directly
-- Submission requires env vars or flags on the `sbatch` command line
-- Experiment parameters (model, dataset, hyperparams) live as shell vars in the `.sh` instead of a config YAML
-
 ## Common Mistakes
 
 - Parsing train config in bash (awk/sed/embedded Python) instead of letting the application load it
 - Putting train config files in `slurm/` instead of with the repo's other configs
-- Creating scripts the user didn't ask for (eval, preflight, promotion, submission wrappers)
 - Writing long sbatch scripts that re-map every config field to a shell variable
 - Storing checkpoints/outputs/data on `$HOME` instead of scratch
-- Creating submission wrappers, preflight scripts, or promotion scripts — just run commands directly
-- Putting anything other than training/eval sbatch scripts in `slurm/`
 - Mixing local and remote paths in one command
 - Copying large datasets with `scp -r` when resumable `rsync -P` is needed
 - Submitting without verifying dataset paths exist on the cluster
 - Submitting without checking script/account/partition settings
 - Creating indirection layers for container bind mounts (symlinks, wrapper dirs) instead of binding directly
-- Resolving config paths from `SCRIPT_DIR` / `$(dirname $0)` — Slurm copies scripts to spool, so these point to the wrong place
-- Overwriting `LD_LIBRARY_PATH` instead of appending — removes Apptainer's injected NVIDIA driver libs
-- Using `--export` env overrides or rsync to change config on the cluster instead of committing and pushing through git
-- Requiring env vars on the `sbatch` line — settings belong in the script or config YAML, not the submit command
 - Forgetting `module load` for the container runtime (check cluster profile)
 - Monitoring wrong user (`squeue -u`) due hardcoded shortname
 - Using container paths not mounted in `apptainer exec --bind`
-- Treating `squeue` RUNNING status or `nvidia-smi` GPU activity as proof that training is healthy — a job can be alive and holding GPU memory while deadlocked on I/O, stuck on a collective, or spinning without advancing steps; always check the `.out` log for advancing step counts
 - Not checking disk usage before or during training — a full filesystem silently deadlocks checkpoint writes, which can hang the training loop for hours until walltime kills the job
 - Running training without W&B tracking/sync and losing experiment visibility

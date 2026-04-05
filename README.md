@@ -14,12 +14,10 @@ Adjust the path if your clone location differs.
 
 ## Repo Layout
 
-- `hpc-workflows.md`
-  - Common flow across local setup, deployment, and training operations.
 - `hpc-container-promotion/SKILL.md`
   - Local Docker build/test and promotion to the cluster-native container artifact/runtime.
 - `hpc-training-operations/SKILL.md`
-  - Slurm submission, monitoring, observability, debugging, and cleanup.
+  - Slurm submission, monitoring, observability, and debugging (Slurm targets only).
 - `hpc-dataset-adaptation/SKILL.md`
   - Adapting code to read the user's dataset format without converting data.
 - `hpc-run-tracking/SKILL.md`
@@ -44,7 +42,7 @@ Never store secrets in profile files.
 
 This repo is a reference — read and follow the docs here, then apply them to whatever target repo you are working in. Do **not** copy or scaffold these files into the target repo.
 
-The Docker container is the execution environment — for local work **and** for the cluster. Do not install dependencies on the host or use conda/mamba/venv as an alternative. Build the image first, run everything inside it.
+The Docker image is the build artifact — for local work **and** for remote deployment. The runtime may be Docker or Apptainer depending on the target. Do not install dependencies on the host or use conda/mamba/venv as an alternative. Build the image first, run everything inside it.
 
 Keep commit messages short — a few words, not a paragraph. Check `git log` in the target repo and match its style.
 
@@ -56,8 +54,8 @@ When resuming work on a repo, check these signals to determine where you are bef
 |--------|-------|
 | No Dockerfile or broken image build | Phase 1 — local Docker |
 | Dockerfile works but training fails on user's data format | Phase 2 — dataset adaptation |
-| Image works locally, no `slurm/` dir or cluster artifacts | Phase 3 — cluster deployment |
-| `slurm/` scripts exist, no `run_logs/` or empty `run_logs/` | Phase 3 — first submission |
+| Image works locally, no remote deployment done yet | Phase 3 — ask user for target environment |
+| `slurm/` scripts exist, no `run_logs/` or empty `run_logs/` | Phase 3 — first submission (Slurm) |
 | `run_logs/` has run logs with results | Ongoing — run tracking |
 | `eval_logs/` has eval logs with metrics | Ongoing — eval tracking |
 
@@ -67,7 +65,7 @@ Report what you find and your best guess to the user (e.g. "Dockerfile exists an
 
 Read `hpc-container-promotion/SKILL.md` (in this repo) and follow Phase 1 for the target repo. Nothing else.
 
-Do **not** read Phase 2 or 3 yet. Do **not** plan for dataset adaptation, cluster deployment, ask which cluster to target, scan for Slurm scripts, or create cluster config files. Those are later concerns and you are not there yet.
+Do **not** read Phase 2 or 3 yet. Do **not** plan for dataset adaptation, remote deployment, ask which target to use, scan for Slurm scripts, or create cluster config files. Those are later concerns and you are not there yet.
 
 Do not move to Phase 2 until the image builds and basic sanity checks pass inside the container using the repo's own data.
 
@@ -77,22 +75,23 @@ Only begin this phase after Phase 1 is complete. If the user's data is already i
 
 Follow `hpc-dataset-adaptation/SKILL.md` (in this repo) to adapt the target repo's code to read the user's dataset. Do not move to Phase 3 until training runs end-to-end with the user's data.
 
-### Phase 3 — Cluster deployment
+### Phase 3 — Remote deployment
 
 Only begin this phase after Phase 1 (and Phase 2 if applicable) is complete and the Docker image works locally.
 
-The workflow is simple: push code to GitHub, pull on HPC, upload image and data, submit training. Do not create helper scripts, wrapper scripts, or multi-stage pipelines. Run commands directly.
+The workflow is simple: push code, upload image and data, run training. Do not create helper scripts, wrapper scripts, or multi-stage pipelines. Run commands directly.
 
-1. Follow Phase 3 of `hpc-container-promotion/SKILL.md` (in this repo) to promote the image for the target cluster.
-2. Identify the target cluster and read `cluster-profiles/<cluster_name>.md` (in this repo) to decide the deployment path.
-3. Follow `hpc-training-operations/SKILL.md` (in this repo) to write sbatch scripts and submit jobs.
-4. The only scripts you should create in the target repo's `slurm/` are training and eval sbatch scripts. Nothing else.
+1. Identify the target environment and read `cluster-profiles/<cluster_name>.md` (in this repo). The profile determines the deployment path — not all targets are Slurm clusters.
+2. **If the target is a cloud VM** (e.g. GCloud): the cluster profile is the workflow — follow it directly for instance creation, environment setup, building the image on the VM, and running training. Skip `hpc-container-promotion` Phase 3 and `hpc-training-operations` — they don't apply.
+3. **If the target uses Slurm** (e.g. Isambard): follow Phase 3 of `hpc-container-promotion/SKILL.md` to promote the image, then `hpc-training-operations/SKILL.md` to write sbatch scripts and submit. The only scripts you should create in the target repo's `slurm/` are training and eval sbatch scripts.
+
+Once training is running (container launched on a cloud VM, or job submitted on Slurm), move to the Ongoing phase below.
 
 ### Ongoing — Run and eval tracking
 
-Once you start submitting jobs, follow `hpc-run-tracking/SKILL.md` (in this repo) for every run. This is not a one-time setup step — it is an ongoing practice.
+Once you start running training, follow `hpc-run-tracking/SKILL.md` (in this repo) for every run. This is not a one-time setup step — it is an ongoing practice.
 
-- Create a run log in `run_logs/` when you submit a job.
+- Create a run log in `run_logs/` when you start a training run.
 - Update it when checking status or collecting results.
 - For replication runs, a single log per task is enough.
 - For experiment runs, maintain a comparison summary across variations.

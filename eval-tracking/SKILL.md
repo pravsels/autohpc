@@ -52,13 +52,13 @@ Include at minimum:
 - dataset: `<actual filename>` at `<path>` (if hosted online, link: `<URL>`)
 
 ## Job
-- job_id: <filled after sbatch>
+- execution_id: <Slurm job_id, or instance_name/zone for cloud VMs>
 - submitted/start: `<ISO timestamp>`
 - start_human: `<Wednesday, Feb 25th, 2026>`
 - end: `<ISO timestamp>`
 - end_human: `<Thursday, Feb 26th, 2026>`
 - runtime: `<HH:MM:SS>`
-- node: <filled from squeue/logs>
+- node: <from squeue/logs> (Slurm only — for cloud VMs the instance is already in execution_id)
 
 ## Metrics
 <quantitative results — whatever metrics the eval produces>
@@ -74,7 +74,7 @@ Include at minimum:
 
 ### Monitoring an eval job
 
-The same health check applies as for training jobs: `squeue` showing RUNNING and GPU activity are not proof that eval is progressing. Check the output log for advancing progress (samples processed, metrics being computed) and the error log for failures. Follow the training health checks in `hpc-training-operations` — eval jobs can deadlock on I/O or hang on data loading the same way training jobs do.
+The same health check applies as for training jobs: a running process with GPU activity is not proof that eval is progressing. Check the output log for advancing progress (samples processed, metrics being computed) and the error log for failures. On Slurm, check `slurm-<job_id>.out` and `.err`. On cloud VMs, check the persisted log file or `docker logs`.
 
 ### Provenance
 
@@ -112,7 +112,6 @@ A one-liner recommendation. This is the first thing someone reads when they open
 
 ## Common Mistakes
 
-- Logging an eval job as "running" based on queue status or GPU activity without checking the output log — eval jobs can hang the same way training jobs do; verify output is being produced before recording a healthy status
 - Eval log without provenance — then you can't trace metrics back to the checkpoint or training run that produced them
 - Skipping the qualitative section — metrics alone don't capture perceptual quality issues
 - Not recording a verdict — then you have to re-analyze the eval to decide if the checkpoint is usable

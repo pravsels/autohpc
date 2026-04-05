@@ -41,8 +41,8 @@ Docker scripts and the Dockerfile go in `docker/` in the target repo.
    - Verify the image tag actually exists (`docker pull`) before writing the Dockerfile.
 4. The Dockerfile must install **all** runtime dependencies (use `requirements.txt`, `conda_env.yaml`, or equivalent from the repo). The image must be able to run the application, not just import the package.
 5. Build the Docker image. Use `--network host` to avoid DNS resolution failures inside the build container (see "Docker build networking" below).
-5. Smoke test inside the container. Open a shell in the container (`./docker/run_script.sh` or `docker run --rm --gpus all -it <image> bash`) and run the Python command directly. Do **not** create smoke test wrapper scripts — they add nothing over typing the command yourself. A smoke test means running the actual application workflows that will run on the HPC — inference with provided weights, or a short training run on a small batch. It does **not** mean `python -V` or a bare import check.
-6. Do not proceed to Phase 3 until the image builds and smoke tests pass.
+6. Smoke test inside the container. Open a shell in the container (`./docker/run_script.sh` or `docker run --rm --gpus all -it <image> bash`) and run the Python command directly. Do **not** create smoke test wrapper scripts — they add nothing over typing the command yourself. A smoke test means running the actual application workflows that will run on the HPC — inference with provided weights, or a short training run on a small batch. It does **not** mean `python -V` or a bare import check.
+7. Do not proceed to Phase 3 until the image builds and smoke tests pass.
 
 ### Docker Build Script Conventions
 
@@ -90,30 +90,35 @@ cd "$REPO_DIR/docker"
 docker run --rm --gpus all "${IMAGE_NAME}:${IMAGE_TAG}" python <inference_or_train_script> <args>
 ```
 
-## Phase 3 — Cluster promotion (only after Phase 1 passes)
+## Phase 3 — Remote deployment (only after Phase 1 passes)
 
 Only begin this after the Docker image builds and smoke tests pass locally.
 
-If the cluster architecture differs from local (e.g. arm64 vs amd64), you will likely need to rebuild for that architecture. Before starting a cross-arch build, verify that pinned packages in `requirements.txt` have wheels available for the target architecture and Python version. Builds are expensive in time — check availability first, resolve all blockers, then build once. When a specific package fails during a build, verify its wheel exists for the target platform before changing the Dockerfile and rebuilding.
+**Read the cluster profile first.** The profile determines the deployment path — not all targets work the same way.
+
+### Cloud VMs with Docker (e.g. GCloud)
+
+If the target runs Docker natively, the export/convert/upload workflow does not apply. Instead:
+
+1. Follow the cluster profile to create and configure the VM.
+2. Push code to GitHub, clone on the VM, and build the image natively there.
+3. Run training directly with `docker run --gpus all`.
+
+This avoids cross-architecture builds and multi-GB image uploads. The cluster profile has the full workflow — instance creation, environment setup, training, and cleanup.
+
+### Slurm clusters with Apptainer/Singularity (e.g. Isambard)
+
+If the cluster architecture differs from local (e.g. arm64 vs amd64), rebuild for that architecture. Before starting a cross-arch build, verify that pinned packages in `requirements.txt` have wheels available for the target architecture and Python version. Builds are expensive in time — check availability first, resolve all blockers, then build once. When a specific package fails during a build, verify its wheel exists for the target platform before changing the Dockerfile and rebuilding.
 
 Do not create promotion scripts, preflight scripts, or submission wrappers. Run commands directly.
 
-Run SSH commands yourself — do not ask the user to run them for you. Request `all` permissions so you can access the user's SSH config and certificates. Only fall back to asking the user if SSH fails after that (e.g. expired certificate).
-
-Open an SSH ControlMaster connection at the start and reuse it for all subsequent commands:
-
-```bash
-export SSH_CTRL="/tmp/ssh-ctrl-%r@%h:%p"
-ssh -fNM -o ControlPath="$SSH_CTRL" "$SSH_ALIAS"            # open once
-ssh -o ControlPath="$SSH_CTRL" "$SSH_ALIAS" "<command>"      # reuse for each command
-ssh -o ControlPath="$SSH_CTRL" -O exit "$SSH_ALIAS"          # close when done
-```
+Run SSH commands yourself — do not ask the user to run them for you. Request `all` permissions for SSH access. Use an SSH ControlMaster connection to avoid repeated auth (see `hpc-training-operations/SKILL.md` for the pattern).
 
 The deployment workflow:
 
 1. Push code to GitHub and pull on the HPC.
 2. Read `cluster-profiles/<cluster_name>.md` to check the container runtime. Not all clusters run Docker — many require `.sif` images via `apptainer`/`singularity`. This determines what you upload.
-3. Export the Docker image (`docker save`). If the cluster requires `.sif`, convert locally (`apptainer build`) before uploading.
+3. Export the Docker image (`docker save`). If the cluster requires `.sif`, convert locally (`apptainer build`) before uploading. If `apptainer` is not installed locally, upload the `.tar` and convert on the cluster (most HPC clusters have `apptainer` available as a module — check the cluster profile).
 4. Upload the container artifact and any datasets to HPC scratch.
 5. Hand off to `hpc-training-operations/SKILL.md` for job submission.
 
@@ -122,25 +127,22 @@ The deployment workflow:
 | Goal | Command |
 |---|---|
 | Export tar | `docker save -o <image>_<tag>.tar <image>:<tag>` |
-| Convert tar to sif | `apptainer build <image>_<tag>.sif docker-archive://<image>_<tag>.tar` |
+| Convert tar to sif (local) | `apptainer build <image>_<tag>.sif docker-archive://<image>_<tag>.tar` |
+| Convert tar to sif (on cluster) | Upload `.tar`, then on the cluster: `apptainer build <image>_<tag>.sif docker-archive://<image>_<tag>.tar` |
 | Upload artifact | `rsync -avP <artifact> <ssh_alias>:<remote_path>/` |
 | Verify remote artifact | `ssh <ssh_alias> "ls -lh <remote_path>/<artifact>"` |
 
 ## Common Mistakes
 
-- Creating promotion scripts, submission wrappers, or preflight scripts — just run the commands directly
 - Uploading a Docker tar without checking if the cluster even runs Docker — read the cluster profile for the container runtime first
 - Reusing mutable tags (`latest`) so runs are not reproducible
 - Treating `python -V` or a bare import as a smoke test — run real application workflows
-- Creating smoke test shell scripts — just run the command in the container shell
 - Skipping local smoke tests before conversion
 - Building an image without installing all runtime dependencies from the repo
 - Ignoring repo-provided `docker/` wrappers and rebuilding ad-hoc
-- Building without `--network host` — DNS fails silently in the default Docker network, producing misleading "unable to locate package" errors that are actually DNS resolution failures
 - Building without explicit platform selection — silently produces wrong architecture for the target cluster
 - Using the same image tag for different architectures — overwrites and causes silent failures
-- Choosing an x86-only base image in Phase 1 (e.g. `pytorch/pytorch:*`) then discovering it has no arm64 manifest in Phase 3 — check `docker manifest inspect` upfront
-- Pinning package versions without checking arm64 wheel availability — wastes hours on a build that fails at `pip install`
+- Cross-building and uploading a multi-GB image to a cloud VM that runs Docker natively — just clone and build on the VM
 - Uploading to `~/...` when job scripts expect `/scratch/...`
 - Hardcoding old aliases/usernames in remote paths
 - Inlining secrets for private pulls instead of secure auth flow
