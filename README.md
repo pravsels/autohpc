@@ -111,6 +111,6 @@ That split keeps replication and experimentation separate: use this repo's run a
 
 Even in ongoing work, do not infer experimentation mode from files alone. Confirm with the user whether the current objective is still replication or whether they want to switch into experiment exploration.
 
-## Inspiration
+## Acknowledgement
 
 Inspired by [karpathy/autoresearch](https://github.com/karpathy/autoresearch).
