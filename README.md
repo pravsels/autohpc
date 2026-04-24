@@ -24,10 +24,16 @@ Adjust the path if your clone location differs.
   - Maintaining per-run logs for submitted jobs: config, status, results, next steps.
 - `eval-tracking/SKILL.md`
   - Maintaining per-eval logs for checkpoint evaluations: provenance, metrics, qualitative assessment, verdict.
+- `checkpoint-passport/`
+  - Skill **and** runnable Python package for producing and verifying `MODEL_PASSPORT.json` / `SIGNOFF.json`. Generated **right after training, before the checkpoint moves anywhere** (HF upload, copy to eval box, copy to robot, hand to colleague) — every downstream consumer, including the eval harness itself, reads the passport. Installable: `uv pip install -e checkpoint-passport`.
+- `deployment-protocol/`
+  - Docs-only skill for first-run / fresh-run deployment preflight on a real robot or inference rig. Uses `MODEL_PASSPORT.json`, the target repo's real runner code, and live device samples to verify the whole chain before the first run.
 - `autoresearch/`
   - Git submodule for autonomous post-baseline experiment loops once replication runs and evals are stable.
 - `cluster-profiles/`
   - One file per cluster with docs links and cluster-specific notes.
+
+Most skill folders are docs-only (one `SKILL.md` describing commands the agent already has — `docker`, `sbatch`, etc.). A few skills also ship bespoke tooling alongside the SKILL.md (e.g. `checkpoint-passport/` ships a pip-installable Python package). When a skill ships code, it lives inside that skill's folder so the workflow and the tool stay in lockstep.
 
 ## Adding A Cluster
 
@@ -57,7 +63,10 @@ When resuming work on a repo, check these signals to determine where you are bef
 | Image works locally, no remote deployment done yet | Phase 3 — ask user for target environment |
 | `slurm/` scripts exist, no `run_logs/` or empty `run_logs/` | Phase 3 — first submission (Slurm) |
 | `run_logs/` has run logs with results | Ongoing — run tracking |
-| `eval_logs/` has eval logs with metrics | Ongoing — eval tracking |
+| A run log just landed (training finished, `wandb sync` succeeded) and the checkpoint dir has no `MODEL_PASSPORT.json` / `SIGNOFF.json` | Post-train — checkpoint passport |
+| User is about to upload a checkpoint to HF / copy it to an eval box / copy it to a robot / hand it off, and there's no `MODEL_PASSPORT.json` / `SIGNOFF.json` | Post-train — checkpoint passport (gate it first) |
+| Checkpoint dir has a passing `SIGNOFF.json` and the next step is the first run on a robot or inference rig, or a fresh run after hardware / runner / checkpoint changes | Post-passport — deployment protocol |
+| Checkpoint dir has a passing `SIGNOFF.json` and `eval_logs/` has eval logs with metrics | Ongoing — eval tracking |
 
 Report what you find and your best guess to the user (e.g. "Dockerfile exists and builds, slurm scripts are present, run_logs/ has 12 logged runs — looks like you're in the ongoing phase. Are you still focused on replication baselines, or are you now in experimentation mode?"). Wait for confirmation before continuing — the signals above are heuristics, and the user may know better (e.g. the image builds but is stale, run_logs exist from a previous attempt that was abandoned, or experiment logs exist even though the current goal is still baseline replication).
 
@@ -87,7 +96,7 @@ The workflow is simple: push code, upload image and data, run training. Do not c
 
 Once training is running (container launched on a cloud VM, or job submitted on Slurm), move to the Ongoing phase below.
 
-### Ongoing — Run and eval tracking
+### Ongoing — Run tracking
 
 Once you start running training, follow `hpc-run-tracking/SKILL.md` (in this repo) for every run. This is not a one-time setup step — it is an ongoing practice.
 
@@ -96,10 +105,56 @@ Once you start running training, follow `hpc-run-tracking/SKILL.md` (in this rep
 - For replication runs, a single log per task is enough.
 - For experiment runs, maintain a comparison summary across variations.
 
-When evaluating checkpoints, follow `eval-tracking/SKILL.md` (in this repo) for every eval.
+When a run finishes and `wandb sync` (or equivalent) confirms the training trace is intact, move to the next phase before doing anything else with the checkpoint.
+
+### Post-train — Checkpoint passport
+
+A trained checkpoint sitting on the training filesystem is not yet a deliverable. The instant anyone — the trainer, an eval job, a colleague, a robot, future-you — copies those files anywhere else, they need to know what the model expects on its inputs, what comes out, what's inside, and that the bytes haven't been tampered with. That contract lives in two artifacts at the checkpoint root: `MODEL_PASSPORT.json` and `SIGNOFF.json`.
+
+**Trigger:** training run finished, `wandb sync` succeeded, the user is considering uploading to HF / copying to an eval box / copying to a robot / handing off. The passport is generated **before** any of those movements happen, not after.
+
+**Why this ordering:** the eval harness itself is a passport consumer. It reads `input_contract` to know how to feed the model (image dtype, value range, color order, channel layout, state sub-key layout, action post-processing) instead of re-deriving it from training code or hardcoding guesses. If you eval first and passport later, an eval feeding bug will silently corrupt your eval numbers and you'll blame the model. If you upload to HF first and passport later, the HF snapshot is permanently unsigned and any cached copies people made in the interim never get a passport. Passport-then-move closes both holes.
+
+Follow `checkpoint-passport/SKILL.md` (in this repo) to produce the passport, then sign it.
+
+The skill ships a runnable Python package — install once per environment:
+
+```bash
+uv pip install -e ../autohpc/checkpoint-passport
+```
+
+Then for each checkpoint:
+
+1. Generate `MODEL_PASSPORT.json` per the SKILL (mix of static file inspection and a single forward-pass smoke run inside the model's own container).
+2. Run `validate-checkpoint <ckpt_dir>` and iterate until there are no hard failures (soft signals are OK if documented).
+3. Run `sign-checkpoint <ckpt_dir> --reason '<one-liner if any soft signals>'` to write `SIGNOFF.json`.
+4. From that point on, any consumer (eval harness, robot loader, colleague's repo) can run `validate-checkpoint <ckpt_dir> --require-signoff` as a load-time gate; non-zero exit means do not load this checkpoint.
+
+Do **not** treat passport generation as optional. A checkpoint without a passing signoff has no integrity story — there is nothing to detect a corrupted weight file, a mismatched config, a silent dependency drift between training and inference, or an eval harness silently mis-feeding the model.
+
+### Post-passport — Deployment protocol
+
+Once a checkpoint has a passing `SIGNOFF.json`, and the next step is the
+first run on a robot or inference rig (or a fresh run after hardware,
+runner, bindings, or checkpoint changes), follow
+`deployment-protocol/SKILL.md`.
+
+This is the deployment-side gate. The skill tells the agent to read the
+passport, inspect the target repo's real inference path, compare live
+device samples against the passport's contract, and do one controlled
+dry-run preflight so the whole chain is understood before the first run.
+
+Use the target repo's own code/container for this work. Do not build a
+generic `autohpc` package for deployment preflight unless the user
+explicitly asks for one.
+
+### Ongoing — Eval tracking
+
+Once a checkpoint has a passing `SIGNOFF.json`, evaluating it is a separate, ongoing practice. Follow `eval-tracking/SKILL.md` (in this repo) for every eval.
 
 - Create an eval log in `eval_logs/` for each evaluation.
 - Record provenance (which checkpoint, which data), metrics, qualitative assessment, and verdict.
+- The eval harness loads the checkpoint via the passport's `input_contract` — confirm `validate-checkpoint <ckpt_dir> --require-signoff` is part of the eval-job startup so a missing or stale signoff fails fast.
 
 ### After replication baselines are stable
 

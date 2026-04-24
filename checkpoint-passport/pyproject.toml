@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "checkpoint-passport"
+version = "0.1.0"
+description = "Schema, validator, and signer for MODEL_PASSPORT.json / SIGNOFF.json. Post-train integrity + feeding-contract artifacts for trained robotics policy checkpoints, generated before the checkpoint moves anywhere (HF upload, eval, deploy)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "alpha-robotics"}]
+# Intentionally torch-free.  Loading the model class for `model_identity_resolvable`
+# happens by importlib in the validator; the consumer's environment supplies
+# torch + the model package.  This package only depends on stdlib + safetensors
+# for header reads.
+dependencies = [
+  "safetensors>=0.4",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[project.scripts]
+validate-checkpoint = "checkpoint_passport.cli.validate:main"
+sign-checkpoint = "checkpoint_passport.cli.sign:main"
+
+[tool.setuptools.packages.find]
+include = ["checkpoint_passport*"]
+exclude = ["tests*"]
