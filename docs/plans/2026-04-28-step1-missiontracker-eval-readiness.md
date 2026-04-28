@@ -15,16 +15,19 @@ plan" remain accurate as written for the parts that don't depend on Step 1.5.
   schema (`action_dim=17, horizon=32, n_obs_steps=2, image_keys=[front,
   wrist], uses_text=True`) verified against config. Validation script:
   `alpha-robotics/scripts/verify_dit_adapter_load.py`.
-- **Step 1.6**: `pending` — wire RAMEN normalize/unnormalize into
-  `MultiTaskDiTAdapter.predict()` so backtest can actually run a forward
-  pass on this checkpoint family. Currently `predict()` raises
-  `NotImplementedError` for `stats_format="ramen"`.
+- **Step 1.6**: `done` — RAMEN normalize/unnormalize wired into
+  `MultiTaskDiTAdapter.predict()`. Adapter now loads RAMEN stats via
+  `load_ramen_stats` (native format for `ramen_normalize_batch`), reads
+  `ramen_clip_value` from policy config, and performs delta→absolute
+  conversion after unnormalization. Verification script extended to
+  smoke-test predict() with dummy data.
 - **Step 2**: effectively done — `dit_block_tower_norm_fix` is the natural
   trial checkpoint (only signed DiT checkpoint locally; passport already
   exists at `alpha-robotics/checkpoints/dit_block_tower_norm_fix/`).
-- **Steps 3-12**: blocked on Step 1.6.
+- **Steps 3-12**: unblocked (Step 1.6 done). Next: run Step 6 backtest.
 
-Resume work at "Step 1.5 execution log → Carried-forward debts" below.
+Resume work at Step 6 (smallest backtest). Remaining debts listed under
+"Carried-forward debts" below (items 2-4; item 1 resolved by Step 1.6).
 
 ## Location of this note
 
@@ -392,11 +395,9 @@ with the version-pinned env, (iii) record the friction in the eval log,
 
 ### Carried-forward debts (these gate Step 6)
 
-1. **RAMEN `predict()` routing** — implement RAMEN-format normalize +
-   unnormalize in `MultiTaskDiTAdapter.predict()` using
-   `multitask_dit_policy.utils.ramen_normalization.{ramen_normalize_batch,
-   ramen_unnormalize}`. Reference:
-   `multitask_dit_policy/train.py` for how training uses these. ~50 LOC.
+1. ~~**RAMEN `predict()` routing**~~ — **done** (Step 1.6). RAMEN
+   normalize/unnormalize + delta→absolute wired into
+   `MultiTaskDiTAdapter._predict_ramen()`.
 2. **`transformers` version pin** — currently env-resident only. Either
    add a workspace-level constraints file (`alpha-robotics/constraints.txt`
    or similar) referenced by env-creation docs, OR add a state-dict
@@ -770,6 +771,6 @@ of a roadmap-defined Step 1.5 contract):
       (`alpha-robotics/scripts/verify_dit_adapter_load.py`, exits 0 on
       success, non-zero on schema mismatch).
 
-Step 1.6 (RAMEN predict path + transformers pin/shim) is the smallest
-remaining piece before Step 6 can execute. See "Step 1.5 execution log →
-Carried-forward debts".
+Step 1.6 (RAMEN predict path) is done. The adapter runs a full forward
+pass on `dit_block_tower_norm_fix` with correct output shapes and no NaN.
+Remaining debts (items 2-4 above) do not block Step 6.
