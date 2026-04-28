@@ -585,7 +585,26 @@ Exit criteria:
 
 ### Step 4: Establish The Exact Snapshot To Evaluate
 
-Status: not done. ← resume here.
+Status: done.
+
+What already happened (2026-04-28):
+
+- `MODEL_PASSPORT.json` (v0.2) and `SIGNOFF.json` (v0.2) uploaded to HF.
+- HF repo: `pravsels/dit_block_tower_norm_fix`.
+- HF revision: `d1a5f7fb1fe85040b452d293a0ae94fa29bf0083`.
+- Snapshot downloaded to flat directory (no symlinks) and validated with
+  `validate-checkpoint --require-signoff`: 23 passed, 4 soft signals, 0
+  failures.
+- Note: HF cache symlink layout causes path-escape false positives in the
+  validator. Use `snapshot_download(local_dir=...)` to get a flat copy for
+  validation. Validator symlink handling is a future improvement.
+- Passport sha256: `a6b95c662a91ea27ee05c4d5ab67ff6db8e9e05095d354a53d7be319e20c9103`.
+- Signoff sha256: `cd12a18be4da42507a670a68dd9d91a464f513ed2ba646f48c064853f1f93602`.
+- Eval snapshot path: `../alpha-robotics/checkpoints/dit_block_tower_norm_fix/`
+  (replaced local pre-upload copy with exact HF snapshot downloaded via
+  `snapshot_download(local_dir=...)`).
+
+Previously:
 
 The eval should run against the same artifact a downstream consumer would load,
 not an ambiguous local directory.
@@ -617,7 +636,33 @@ Exit criteria:
 
 ### Step 5: Run The Cheapest Behavior Evidence
 
-Status: not done.
+Status: done.
+
+What already happened (2026-04-28):
+
+- **Passport smoke results** (from Phase 2 calibration batch): all 5 buckets
+  pass — determinism (max_abs_diff=0.0), NaN/Inf (0/0 in 1088 samples),
+  liveness (std=0.579), distribution (all per-dim stats recorded),
+  range_check (actual [−0.91, 1.46] within expected [−1.5, 1.5]).
+- **Numerical health**: determinism passed (max_abs_diff=0.0), no NaN/Inf,
+  no dropout modules active, no batchnorm running stats issues.
+- **Fresh forward pass through MissionTracker adapter** on synthetic
+  observations matching passport `input_contract`:
+  - Inputs: state (16,) float32 randn, images front+wrist (3,480,640)
+    float32 rand [0,1], language "build a block tower".
+  - Output shape: action (17,), action_chunk (32, 17) — matches passport
+    action_dim=17, horizon=32.
+  - Output dtype: float32.
+  - NaN/Inf: 0 in both action and chunk.
+  - Range: [−2.10, +1.95] — reasonable post-unnormalization action scale.
+  - Liveness: chunk std across time = 0.033, across dims = 1.12 — non-constant,
+    temporally smooth, dimensionally varied.
+  - Determinism: max abs diff = 0.0 with same seed — fully deterministic.
+  - No obvious action-scale blowup or collapse.
+- **Verdict**: no brokenness detected. Model plumbing is intact through the
+  full normalize → forward → unnormalize → delta-to-absolute path.
+
+Previously:
 
 Before backtest, collect the cheapest signal that the model is not obviously
 broken.
@@ -643,7 +688,7 @@ Exit criteria:
 
 ### Step 6: Run One Offline Eval If Step 1 Found A Usable Backend
 
-Status: blocked until Step 1 is complete.
+Status: not done. ← resume here.
 
 If MissionTracker is usable, run the smallest possible backtest. If it is not
 usable, do not pretend eval exists; write the gap and stop here.
@@ -790,19 +835,72 @@ Exit criteria:
 - Each helper removes repeated manual work observed in Steps 2-9.
 - Helpers consume existing files and do not create a new source of truth.
 
-### Step 12: Consider Automation Last
+### Step 12: Adversarial Inference Run
 
 Status: deferred.
 
-Only revisit automation after multiple checkpoint batches prove the manual
-lifecycle is stable.
+Red-team the passport-based inference protocol. Deliberately introduce one
+fault at a time into a signed checkpoint's environment, then hand it to a
+fresh agent session that has never seen the checkpoint and only has the
+passport and operational skills. The agent should follow the standard
+passport-based inference protocol from scratch. The question is: does the
+protocol surface the fault, or does the agent silently proceed?
 
-Automation candidates:
+Faults to inject (one per trial):
 
-- Poll or trigger on new HF revisions.
-- Submit backtest jobs automatically.
-- Collect eval outputs into logs.
-- Produce a draft promotion note for human review.
-- Maintain a dashboard or leaderboard.
+- Wrong library version (e.g. transformers minor version mismatch).
+- Swapped or missing camera input (wrong image key or resolution).
+- Stale or mismatched normalization stats.
+- Truncated or corrupted weight file (single tensor zeroed).
+- Wrong action space scaling or delta-vs-absolute mismatch.
+- Tampered `SIGNOFF.json` (valid JSON, wrong hash).
+- Missing a file listed in the passport manifest.
+- Incorrect dtype (float16 vs bfloat16).
 
-Do not start here. Automation should execute a proven workflow, not invent one.
+Each trial should record:
+
+- Which fault was injected.
+- Whether the agent's protocol caught it, and at which step.
+- Whether the failure was surfaced as a hard gate, a soft signal, or missed.
+- How far the agent got before stopping or producing wrong output.
+
+Exit criteria:
+
+- Every injected fault is either caught by the protocol or logged as a known
+  gap that needs a new validator or passport field.
+- The passport and inference protocol are updated to close any gaps found.
+
+### Step 13: End-To-End Agent Automation Trial
+
+Status: deferred.
+
+Once the manual lifecycle is stable and the adversarial run has closed
+protocol gaps, test whether an external agent (OpenClaw, Hermes, or
+equivalent) can execute the full checkpoint triage loop from a single
+natural-language request — e.g. a user asking through Slack "evaluate the
+latest checkpoint from this training run."
+
+The agent should, without human hand-holding:
+
+1. Locate the checkpoint and its signed artifacts.
+2. Run the artifact gate.
+3. Run cheap behavior checks.
+4. Run the offline backtest on pinned data.
+5. Write the eval log.
+6. Draft a promotion note.
+7. Report the result back to the requesting channel.
+
+Trial criteria:
+
+- The agent has access only to the operational skills, passport tooling, and
+  eval backend — no roadmap, no prior chat history, no hints.
+- The human reviews the output for correctness, not to steer execution.
+- Record where the agent got stuck, hallucinated, or asked unnecessary
+  clarifying questions.
+
+Exit criteria:
+
+- The agent can complete the loop end-to-end on a known-good checkpoint, or
+  the failure points are documented as skill/tooling gaps to fix first.
+- Do not ship this as a production workflow until at least 3 checkpoint
+  batches have succeeded without human correction.
