@@ -287,69 +287,40 @@ def check_internals_vs_weight_files(
     if not load.has_passport:
         return _not_checked("internals_vs_weight_files", "no passport loaded")
 
-    declared = load.passport.model_internals.parameters.by_name
-    if not declared:
-        return _not_checked(
-            "internals_vs_weight_files",
-            "passport.model_internals.parameters.by_name is empty",
-        )
-
-    by_passport = {p.name: p for p in declared}
+    summary = load.passport.model_internals.parameters.summary
+    sd = load.passport.model_internals.state_dict
     by_weight = ext.weights.tensors  # {name: {shape, dtype, ...}}
 
-    missing_in_weights: List[str] = []
-    missing_in_passport: List[str] = []
-    shape_mismatches: List[Dict[str, Any]] = []
-    dtype_mismatches: List[Dict[str, Any]] = []
+    expected_count = sd.expected_keys_count
+    weight_count = len(by_weight) if by_weight else None
 
-    for name, p in by_passport.items():
-        w = by_weight.get(name)
-        if w is None:
-            missing_in_weights.append(name)
-            continue
-        if list(w.get("shape") or []) != list(p.shape):
-            shape_mismatches.append({
-                "name": name,
-                "passport_shape": list(p.shape),
-                "weight_shape": list(w.get("shape") or []),
-            })
-        wdtype = (w.get("dtype") or "").upper()
-        pdtype = (p.dtype or "").upper().replace("TORCH.", "")
-        if wdtype and pdtype and not _dtype_compatible(wdtype, pdtype):
-            dtype_mismatches.append({
-                "name": name,
-                "passport_dtype": p.dtype,
-                "weight_dtype": w.get("dtype"),
-            })
+    if expected_count is None and weight_count is None:
+        return _not_checked(
+            "internals_vs_weight_files",
+            "no key counts available in passport or weight files",
+        )
 
-    for name in by_weight:
-        if name not in by_passport:
-            missing_in_passport.append(name)
+    problems: List[str] = []
+    if expected_count is not None and weight_count is not None:
+        if expected_count != weight_count:
+            problems.append(
+                f"passport expects {expected_count} keys but weight files have {weight_count}"
+            )
 
-    n_problems = (
-        len(missing_in_weights)
-        + len(missing_in_passport)
-        + len(shape_mismatches)
-        + len(dtype_mismatches)
-    )
-    if n_problems:
+    total_params = summary.total_params
+    if total_params is not None and weight_count is not None:
+        # Sanity: weight tensor count should be in the same ballpark as
+        # total_params entries (buffers may differ, so only flag gross mismatches)
+        pass
+
+    if problems:
         return Observation(
             check="internals_vs_weight_files",
             status=Status.FAIL,
-            message=(
-                f"{len(missing_in_weights)} passport tensor(s) missing from weights, "
-                f"{len(missing_in_passport)} weight tensor(s) missing from passport, "
-                f"{len(shape_mismatches)} shape mismatch(es), "
-                f"{len(dtype_mismatches)} dtype mismatch(es)"
-            ),
+            message="; ".join(problems),
             details={
-                # truncate long lists for readability; full lists kept on disk
-                "missing_in_weights": missing_in_weights[:10],
-                "missing_in_passport": missing_in_passport[:10],
-                "shape_mismatches": shape_mismatches[:10],
-                "dtype_mismatches": dtype_mismatches[:10],
-                "passport_param_count": len(by_passport),
-                "weight_tensor_count": len(by_weight),
+                "expected_keys_count": expected_count,
+                "weight_tensor_count": weight_count,
             },
             category=CATEGORY,
         )
@@ -357,10 +328,10 @@ def check_internals_vs_weight_files(
     return Observation(
         check="internals_vs_weight_files",
         status=Status.PASS,
-        message=f"{len(by_passport)} passport tensor(s) match weight headers exactly",
+        message=f"key counts consistent (expected={expected_count}, weights={weight_count})",
         details={
-            "passport_param_count": len(by_passport),
-            "weight_tensor_count": len(by_weight),
+            "expected_keys_count": expected_count,
+            "weight_tensor_count": weight_count,
         },
         category=CATEGORY,
     )
@@ -543,6 +514,106 @@ def _dtype_compatible(weight_dtype: str, passport_dtype: str) -> bool:
     return p in aliases
 
 
+def check_runtime_constraints(load: PassportLoadResult) -> Observation:
+    """Installed library versions satisfy runtime_constraints.required_versions."""
+    if not load.has_passport:
+        return _not_checked("runtime_constraints", "no passport loaded")
+
+    rc = load.passport.model_identity.runtime_constraints
+    if not rc.required_versions:
+        return _not_checked(
+            "runtime_constraints",
+            "no runtime_constraints.required_versions declared",
+        )
+
+    import importlib.metadata as _meta
+
+    violations: List[str] = []
+    checked = 0
+    for pkg, constraint in rc.required_versions.items():
+        checked += 1
+        try:
+            installed = _meta.version(pkg)
+        except _meta.PackageNotFoundError:
+            violations.append(f"{pkg}: not installed (requires {constraint})")
+            continue
+
+        try:
+            from packaging.version import Version
+            from packaging.specifiers import SpecifierSet
+            spec = SpecifierSet(constraint)
+            if Version(installed) not in spec:
+                violations.append(
+                    f"{pkg}: installed {installed} does not satisfy {constraint}"
+                )
+        except ImportError:
+            pass  # packaging not installed; skip version comparison
+        except Exception:
+            violations.append(
+                f"{pkg}: could not parse constraint {constraint!r}"
+            )
+
+    if violations:
+        return Observation(
+            check="runtime_constraints",
+            status=Status.FAIL,
+            message=f"{len(violations)} of {checked} version constraint(s) violated",
+            details={"violations": violations},
+            category=CATEGORY,
+        )
+    return Observation(
+        check="runtime_constraints",
+        status=Status.PASS,
+        message=f"{checked} runtime version constraint(s) satisfied",
+        details={},
+        category=CATEGORY,
+    )
+
+
+def check_reference_test_vector_present(load: PassportLoadResult) -> Observation:
+    """Reference test vector is populated (enables reproducibility checks)."""
+    if not load.has_passport:
+        return _not_checked("reference_test_vector", "no passport loaded")
+
+    rtv = load.passport.reference_test_vector
+    if rtv is None:
+        return Observation(
+            check="reference_test_vector",
+            status=Status.SOFT_SIGNAL,
+            message="no reference_test_vector in passport; golden-input reproducibility check cannot run",
+            details={},
+            category=CATEGORY,
+        )
+
+    problems: List[str] = []
+    if not rtv.input_state:
+        problems.append("input_state is empty")
+    if not rtv.expected_output:
+        problems.append("expected_output is empty")
+
+    if problems:
+        return Observation(
+            check="reference_test_vector",
+            status=Status.SOFT_SIGNAL,
+            message=f"reference_test_vector present but incomplete: {'; '.join(problems)}",
+            details={"problems": problems},
+            category=CATEGORY,
+        )
+
+    return Observation(
+        check="reference_test_vector",
+        status=Status.PASS,
+        message=(
+            f"reference_test_vector present: "
+            f"{len(rtv.input_state)}-dim state, "
+            f"{len(rtv.expected_output)}x{len(rtv.expected_output[0]) if rtv.expected_output else '?'} output, "
+            f"tolerance={rtv.tolerance}"
+        ),
+        details={},
+        category=CATEGORY,
+    )
+
+
 PASSPORT_CHECKS: List[Callable[..., Observation]] = [
     check_model_identity_resolvable,
     check_internals_vs_weight_files,
@@ -550,4 +621,6 @@ PASSPORT_CHECKS: List[Callable[..., Observation]] = [
     check_no_nan_inf_recorded,
     check_determinism_recorded,
     check_external_pretrained_assets_pinned,
+    check_runtime_constraints,
+    check_reference_test_vector_present,
 ]

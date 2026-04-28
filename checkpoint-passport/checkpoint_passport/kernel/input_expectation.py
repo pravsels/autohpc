@@ -727,10 +727,65 @@ def _local_dataset_candidate(d: TrainingDatasetSpec) -> Optional[Path]:
 # Passport-driven checks. The runner calls these with a PassportLoadResult
 # (and the static extraction). `check_input_contract_vs_dataset` also
 # accepts an optional dataset_path, threaded through from the CLI.
+def check_camera_identity(load: PassportLoadResult) -> Observation:
+    """Camera identity fields populated on image specs (enables swap detection)."""
+    if not load.has_passport:
+        return _not_checked("camera_identity", "no passport loaded")
+
+    images = load.passport.input_contract.images
+    if not images:
+        return _not_checked("camera_identity", "no images in input_contract")
+
+    populated = 0
+    total = len(images)
+    missing_fields: List[str] = []
+
+    for img in images:
+        has_any = any([
+            img.camera_serial,
+            img.camera_usb_path,
+            img.reference_frame_hash,
+        ])
+        if has_any:
+            populated += 1
+        else:
+            missing_fields.append(img.key)
+
+    if populated == 0:
+        return Observation(
+            check="camera_identity",
+            status=Status.SOFT_SIGNAL,
+            message=(
+                f"no camera identity fields on any of {total} image spec(s); "
+                "camera swap detection unavailable"
+            ),
+            details={"cameras_without_identity": missing_fields},
+            category=CATEGORY,
+        )
+
+    if populated < total:
+        return Observation(
+            check="camera_identity",
+            status=Status.SOFT_SIGNAL,
+            message=f"{populated}/{total} image spec(s) have camera identity fields",
+            details={"cameras_without_identity": missing_fields},
+            category=CATEGORY,
+        )
+
+    return Observation(
+        check="camera_identity",
+        status=Status.PASS,
+        message=f"all {total} image spec(s) have camera identity fields",
+        details={},
+        category=CATEGORY,
+    )
+
+
 PASSPORT_CHECKS: List[Callable[..., Observation]] = [
     check_input_contract_vs_config,
     check_input_contract_vs_norm_stats,
     check_input_contract_vs_dataset,
     check_training_datasets_present,
     check_training_datasets_resolvable,
+    check_camera_identity,
 ]

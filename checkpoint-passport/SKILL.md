@@ -9,7 +9,7 @@ description: Use right after a training run finishes and `wandb sync` (or equiva
 
 Two artifacts at the checkpoint root:
 
-- **`MODEL_PASSPORT.json`** — describes what the model expects on its inputs (image keys, shapes, normalization), what its action output looks like (dim, horizon, post-processing), what's inside it (module hierarchy, parameter counts, pretrained backbones), and how to run it (inference parameters, smoke test results).
+- **`MODEL_PASSPORT.json`** — a chain-of-custody document from sensor to action output. Every entity (sensor reading, image, state vector, action) and every transformation (resize, normalize, delta, clip, unnormalize) is recorded so it can be audited. The passport covers: input contract, model identity (including runtime constraints), model internals, output spec, weight integrity, provenance (including checkpoint lineage), the ordered transform pipeline, reference test vectors, normalization round-trip results, and known issues.
 - **`SIGNOFF.json`** — sha256 of the passport plus every weight file the passport declares, plus a verdict and a one-line reason. Signed signoffs only ever carry verdict `pass` or `soft_signal`; the schema reserves `fail` for completeness, but the signer refuses to write a signoff at all when validation reports hard failures (it exits non-zero and prints the failures, leaving no signoff on disk).
 
 Together they let any consumer (a robot, an eval harness, a teammate's repo) call `validate-checkpoint <ckpt_dir> --require-signoff` as a load-time gate. Non-zero exit means do not load this checkpoint.
@@ -60,10 +60,15 @@ Pure file inspection. You can do this from any host (with the caveat in the tabl
 | `config.json` → `objective` block (scheduler, num_steps, `clip_sample`, `clip_sample_range`) and any `*_clip_value` post-processing fields | `output_spec.inference_parameters` (sampling config); also drives the smoke `range_check` acceptance bounds in Phase 2 |
 | `config.json` → tokenizer / language fields | `input_contract.language` |
 | `config.json` → top-level `n_obs_steps`, `control_rate_hz` | `input_contract.temporal` |
-| Norm stats file (often `assets/<stack>_stats.json`, sometimes embedded in `config.json`) — keys + per-dim mean/std/quantiles + per-dim `norm_mask` | `input_contract.state.normalization`, `.actions.normalization`; `actions.norm_mask` and `actions.delta_dims` (free-text doc derived from `norm_mask` plus rotation slice — describes which dims are deltas vs absolute, normalized vs not) |
+| Norm stats file (often `assets/<stack>_stats.json`, sometimes embedded in `config.json`) — keys + per-dim mean/std/quantiles + per-dim `norm_mask` | `input_contract.state.normalization`, `.actions.normalization`; `actions.norm_mask` and `actions.delta_dims` (structured `DeltaSpec` with `delta_mask: List[bool]` and `absolute_dims_reason`) |
 | Training log / launcher metadata | `input_contract.training_datasets[]`, `provenance.*` |
 | safetensors header (no weight load — `safe_open(..., framework='pt').keys()`) | `weight_integrity.weight_files[]` (path, sha256, size) |
 | Config + class import path of training stack | `model_identity.class_name`, `.class_module` (note: once these are filled, `model_identity_resolvable` will hard-fail on any host that can't import the class — full validation moves to Phase 2's container) |
+| Config + norm stats + dataset adapter code | `transform_pipeline[]` — ordered `TransformStep` list documenting the full data flow (sensor → action). Each step has `check_type: "static" \| "dynamic"` |
+| Config + known bugs / environment issues | `known_issues[]` — `KnownIssue` entries with `id`, `severity`, `workaround`, `check_type` |
+| Config → library versions + known breakage | `model_identity.runtime_constraints` — `required_versions`, `required_python`, `known_incompatible` |
+| Camera metadata (serial numbers, USB paths, reference frames) | `input_contract.images[].camera_serial`, `.camera_usb_path`, `.reference_frame_hash`, `.reference_frame_path` |
+| Checkpoint lineage (if fine-tuned) | `provenance.parent_checkpoint`, `.parent_description` |
 
 **Conventions worth knowing now (full reasoning lives in the schema docstrings):**
 
@@ -71,6 +76,10 @@ Pure file inspection. You can do this from any host (with the caveat in the tabl
 - Norm-stats fingerprint: when stats are flat per-dim, populate `per_dim_q02` / `per_dim_q98`. When stats are per-timestep `(H, D)`, suffix the keys with `_at_t0` (the validator's helper takes row 0). The `_at_t0` convention is checked by the kernel.
 - `provenance.run_log_path` accepts either a relative `.md` path under the checkpoint repo OR an `http(s)://` URI to an external dashboard (W&B, MLflow). Pick whichever is the canonical pointer for this run.
 - `weight_integrity.weight_files[]` should list **every** file that ships with the checkpoint and is loaded at inference time, not just the safetensors. That includes `config.json`, norm stats, tokenizer files. The signer hashes everything in this list.
+- `actions.delta_dims` is now a structured `DeltaSpec` with `delta_mask: List[bool]` (per-dim: `True` = delta, `False` = absolute) and `absolute_dims_reason` (e.g. "6D rotation (rot6d) passed through unchanged"). This replaces the free-text format from v0.1.
+- `transform_pipeline` is a top-level ordered list of `TransformStep`. Populate one entry for each data transformation from raw sensor to model input and from model output to robot command. Example steps: resize, ImageNet normalize, rotation expansion, RAMEN normalize, delta computation, camera stacking, temporal stacking, text tokenization, RAMEN unnormalize, delta-to-absolute conversion.
+- `runtime_constraints` on `model_identity` declares inference-time version requirements (contract), separate from `library_versions` (historical). Populate `required_versions` with pinned versions that **must** match (e.g. `transformers==5.4.0`), and `known_incompatible` with version ranges known to break.
+- `known_issues` is a top-level list documenting environment/library/config bugs with workarounds and severity. Each issue has `check_type` to indicate whether code or an agent should verify it.
 
 **Pretrained-backbone provenance:** for any external pretrained submodule (HF model, timm model, custom URL), record an entry in `model_internals.pretrained_provenance[]` with the framework's own identifier (HF revision sha for HF, full timm string like `vit_base_patch16_clip_224.openai` for timm, etc.). For HF specifically, do not leave `hf_revision: null` — `huggingface_hub.HfApi().model_info(repo).sha` returns the canonical revision in one call. Always pin.
 
@@ -97,14 +106,42 @@ Load the model, walk it, run one forward pass on a synthetic calibration batch. 
 **What to populate from the dynamic run:**
 
 - `model_identity.library_versions` — torch, python, cuda, the model package, all transitive deps you can list (`pkg_resources` or `importlib.metadata`).
-- `model_internals.module_hierarchy` — walk `named_modules()`, build a tree.
-- `model_internals.parameters` — summary (totals) + `by_name` list with shapes & dtypes from `named_parameters()`.
+- `model_internals.module_hierarchy` — walk `named_modules()`, build a tree (top 2 levels for structural identification; full tree is recoverable from `named_modules()`).
+- `model_internals.parameters.summary` — totals (total_params, trainable, frozen, bytes, dtype_breakdown). Per-parameter list (`by_name`) was removed in v0.2; it's recoverable from `safe_open(path).metadata()`.
 - `model_internals.buffers` — `named_buffers()`.
 - `model_internals.state_dict` — `expected_keys_count`, `found_keys_count`, plus `missing_keys` / `unexpected_keys` from `model.load_state_dict(..., strict=False)`.
 - `model_internals.numerical_health` — run forward twice with the same `torch.manual_seed(0)`, confirm no NaN/Inf, confirm `max_abs_diff == 0` between the two passes.
 - `output_spec.smoke_results` — five typed buckets (`determinism`, `nan_inf`, `liveness`, `distribution`, `range_check`). Each is its own sub-dataclass in the schema with explicit fields — read `SmokeResults` in `schema.py` before populating. Each bucket needs `status: "pass" | "fail"`. The acceptance range for `range_check` should be derived from the model's own clip values (`clip_sample_range`, normalization clip values) — don't hardcode.
+- `reference_test_vector` — golden input/output pair (state, prompt, image hashes, expected output, tolerance, torch seed). Run the model on this fixed input and record the output.
+- `norm_round_trip_results` — for each normalization step in `transform_pipeline`, take a known input, normalize, unnormalize, verify recovery within tolerance. Records `max_abs_error`, `within_clip_bound`, `status`.
 
 Splice the dynamic JSON into the static draft (a small Python script merging the two dicts is fine). The passport is now complete.
+
+## Check Classification — Static vs Dynamic
+
+Every checkable claim in the passport falls into one of two categories:
+
+**Static checks (code runs, pass/fail, no judgment):**
+- File hashes match signoff
+- Library versions match `runtime_constraints.required_versions`
+- State dict key count matches
+- Config values match passport (action_dim, horizon, image shapes)
+- Norm stats file sha matches passport fingerprint
+- No NaN/Inf in weights
+- Reference test vector reproduces expected output within tolerance
+- Device paths / camera serials match expected mapping
+- `observation_delta_indices` matches config
+- Transform pipeline steps match code behavior
+- Normalization round-trip invertibility
+
+**Dynamic checks (agent runs, needs judgment or context):**
+- Camera swap detection (visual comparison of live frame to reference)
+- Soft signal triage (is state_dim 13→16 rot6d expansion intentional?)
+- Environment contamination (unexpected PYTHONPATH entries)
+- Output sanity on real data (are actions physically reasonable?)
+- Cross-referencing passport against W&B training logs
+- Deciding if a version mismatch is acceptable or blocking
+- Validating that `physical_mounting` descriptions match physical setup
 
 ## Phase 3 — Validate and iterate
 
@@ -174,3 +211,6 @@ Non-zero exit = do not ship.
 - **Treating soft signals as "good enough, ship it"** — sign with `--reason` and explain *each* soft signal. The reason string is the only audit trail for an acceptance decision.
 - **Editing the passport after signing without re-signing** — the passport sha in the signoff no longer matches; the next `validate-checkpoint --require-signoff` hard-fails. Always re-run `sign-checkpoint` after any passport edit.
 - **Generating a passport without the training-repo commit SHA** — you'll guess wrong and produce a passport that documents the wrong code. Stop and ask the user instead.
+- **Leaving `transform_pipeline` empty** — the pipeline is the chain-of-custody. Without it, the passport can't be audited end-to-end.
+- **Leaving `runtime_constraints` empty when there are known version sensitivities** — `library_versions` is historical; if a specific version is *required* for correctness (e.g. transformers API drift), it must be in `runtime_constraints.required_versions`.
+- **Not running the normalization round-trip check** — clipping-induced loss is expected and documented; what catches bugs is wrong stats / wrong function / wrong mask, and the round-trip surfaces all of these.

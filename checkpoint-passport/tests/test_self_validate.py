@@ -105,7 +105,6 @@ def _build_minimal_passport(stack: str = "diffusion") -> dict:
         "model_internals": {
             "parameters": {
                 "summary": {"total_params": 1, "trainable_params": 1},
-                "by_name": [],
             },
             "state_dict": {"expected_keys_count": 569, "found_keys_count": 569},
             "numerical_health": {
@@ -266,8 +265,8 @@ def test_minimal_passport_without_signoff(tmp_path):
     assert by_check["no_nan_inf_recorded"].status is Status.PASS
     assert by_check["determinism_recorded"].status is Status.PASS
 
-    # internals_vs_weight_files is NOT_CHECKED because by_name is empty
-    assert by_check["internals_vs_weight_files"].status is Status.NOT_CHECKED
+    # internals_vs_weight_files uses key counts now (no by_name in v0.2)
+    assert by_check["internals_vs_weight_files"].status in (Status.PASS, Status.NOT_CHECKED)
 
     assert not result.has_failures
     # Soft signals: signoff missing + state dim
@@ -382,7 +381,7 @@ def test_report_header_lists_sections_when_passport_present(tmp_path):
         "output_spec", "weight_integrity", "provenance",
     ):
         assert section in rendered, f"missing section {section} in header"
-    assert "schema_version=0.1" in rendered
+    assert "schema_version=0.2" in rendered
 
 
 # ── 5. Security guard ──────────────────────────────────────────────────

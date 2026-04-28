@@ -6,8 +6,8 @@ from dataclasses import dataclass, field, fields, asdict
 from typing import Any, Dict, List, Optional
 
 
-SCHEMA_VERSION = "0.1"
-SIGNOFF_SCHEMA_VERSION = "0.1"
+SCHEMA_VERSION = "0.2"
+SIGNOFF_SCHEMA_VERSION = "0.2"
 
 # Anything not in this set lands in ModelPassport.extra_sections (forward compat).
 KNOWN_PASSPORT_SECTIONS = {
@@ -17,6 +17,8 @@ KNOWN_PASSPORT_SECTIONS = {
     "output_spec",
     "weight_integrity",
     "provenance",
+    "transform_pipeline",
+    "known_issues",
 }
 
 
@@ -43,6 +45,10 @@ class ImageSpec:
     normalization: Optional[Dict[str, Any]] = None         # type + mean/std if applicable
     augmentations_in_training: List[str] = field(default_factory=list)
     physical_mounting: Optional[str] = None                # free text, e.g. "wrist cam"
+    camera_serial: Optional[str] = None                    # hardware serial number
+    camera_usb_path: Optional[str] = None                  # USB bus/port topology
+    reference_frame_hash: Optional[str] = None             # sha256 of a reference image
+    reference_frame_path: Optional[str] = None             # path to the reference image
 
 
 # Aggregate state vector (joint positions, gripper, etc.).
@@ -67,9 +73,16 @@ class StateSpec:
     normalization: Optional[Dict[str, Any]] = None                # type + mean/std if applicable
 
 
+# Structured representation of which action dims are deltas vs absolute.
+@dataclass
+class DeltaSpec:
+    delta_mask: List[bool] = field(default_factory=list)   # per-dim: True = delta, False = absolute
+    absolute_dims_reason: Optional[str] = None             # e.g. "6D rotation (rot6d) passed through unchanged"
+
+
 # Action representation the model was trained on.
 # delta_dims + normalization together let kernel checks catch the
-# delta-vs-absolute bug (norm stats spanning ±2.5 when mode is delta).
+# delta-vs-absolute bug (norm stats spanning +/-2.5 when mode is delta).
 @dataclass
 class ActionSpec:
     """Action output -- horizon, dims, sub-keys, norm mask, normalization."""
@@ -77,7 +90,7 @@ class ActionSpec:
     horizon: Optional[int] = None                                 # action chunk length
     sub_keys: List[Dict[str, Any]] = field(default_factory=list)  # [{name, dim, ...}]
     norm_mask: Optional[List[bool]] = None                        # per-dim: True = normalized
-    delta_dims: Optional[str] = None                              # which dims are delta vs absolute
+    delta_dims: Optional[DeltaSpec] = None                        # which dims are delta vs absolute
     normalization: Optional[Dict[str, Any]] = None                # type + mean/std if applicable
 
 
@@ -97,6 +110,7 @@ class LanguageSpec:
 @dataclass
 class TemporalSpec:
     n_obs_steps: Optional[int] = None             # observation history length
+    observation_delta_indices: Optional[List[int]] = None  # e.g. [-1, 0] for prev + current frame
     delta_timestamps: Optional[Any] = None        # {key: [offsets]} or flat list
     control_rate_hz: Optional[float] = None       # expected inference frequency
 
@@ -136,6 +150,15 @@ class InputContract:
 # ── model_identity ──────────────────────────────────────────────────────
 
 
+# Versions required at inference time (contract), vs library_versions which
+# records what was observed at training time (history).
+@dataclass
+class RuntimeConstraints:
+    required_versions: Dict[str, str] = field(default_factory=dict)  # {"transformers": "==5.4.0"}
+    required_python: Optional[str] = None                            # ">=3.12,<3.13"
+    known_incompatible: List[str] = field(default_factory=list)      # ["transformers>=5.5.0 (CLIP key change)"]
+
+
 # Identity of the model class the checkpoint was trained with.
 # Catches silent class-swap bugs where config.json declares one architecture but
 # the loader silently resolves to a different one (e.g. version mismatch in
@@ -147,23 +170,13 @@ class ModelIdentity:
     config_architectures: List[str] = field(default_factory=list)  # from config.json "architectures"
     resolved_via: Optional[str] = None            # "direct_import" | "transformers.AutoModel"
     resolved_class_name: Optional[str] = None     # what the loader actually instantiated
-    library_versions: Dict[str, str] = field(default_factory=dict)  # torch/transformers/etc.
+    library_versions: Dict[str, str] = field(default_factory=dict)  # torch/transformers/etc. (training-time)
+    runtime_constraints: RuntimeConstraints = field(default_factory=RuntimeConstraints)
     python_version: Optional[str] = None
     cuda_version: Optional[str] = None
 
 
 # ── model_internals ─────────────────────────────────────────────────────
-
-
-# Single named parameter as recorded by the upstream agent after loading.
-# The kernel cross-checks these against safetensors headers on disk.
-@dataclass
-class ParameterEntry:
-    name: str
-    shape: List[int]
-    dtype: str
-    requires_grad: bool
-    num_params: int
 
 
 # Non-parameter persistent tensor (e.g. running mean/var in batch norm).
@@ -185,11 +198,9 @@ class ParametersSummary:
     dtype_breakdown: Dict[str, int] = field(default_factory=dict)  # {"float32": N, ...}
 
 
-# Combines the per-parameter list with the summary rollup.
 @dataclass
 class ParametersBlock:
     summary: ParametersSummary = field(default_factory=ParametersSummary)
-    by_name: List[ParameterEntry] = field(default_factory=list)
 
 
 # Result of load_state_dict(strict=False): which keys were expected vs found.
@@ -422,15 +433,72 @@ class WeightIntegrity:
 # verify format (commit is a valid hash, path doesn't escape the root).
 @dataclass
 class Provenance:
-    # `run_log_path` accepts either a relative .md path under the checkpoint
-    # repo or an http(s) URI to an external dashboard (W&B, MLflow, ...).
-    # Field name kept as `run_log_path` for backward compatibility; semantics
-    # are "URI of the run log" -- a path is just a URI without a scheme.
     run_log_path: Optional[str] = None            # relative .md path OR https:// URI
     training_repo: Optional[str] = None           # git remote URL
     training_repo_commit: Optional[str] = None    # full 40-char sha
     config_snapshot_path: Optional[str] = None    # path to saved training config
     merged_config_sha256: Optional[str] = None    # hash of the resolved training config
+    parent_checkpoint: Optional[str] = None       # passport hash of parent if fine-tuned
+    parent_description: Optional[str] = None      # e.g. "pretrained DiT base, 50K steps on ..."
+
+
+# ── transform_pipeline ──────────────────────────────────────────────────
+
+
+# One step in the ordered data-flow pipeline from sensor to action output.
+# The full pipeline is the chain-of-custody: every transform the data
+# undergoes between raw sensor reading and robot command.
+@dataclass
+class TransformStep:
+    order: int = 0                                # position in the pipeline
+    name: str = ""                                # e.g. "resize_images", "ramen_normalize_state"
+    applies_to: str = ""                          # "images.front", "state", "action", "all_images"
+    operation: str = ""                           # "resize", "imagenet_normalize", "ramen_normalize", ...
+    direction: str = "input"                      # "input" (pre-model) or "output" (post-model)
+    parameters: Dict[str, Any] = field(default_factory=dict)  # operation-specific params
+    check_type: str = "static"                    # "static" or "dynamic"
+    check_description: Optional[str] = None       # what to verify and how
+
+
+# ── reference_test_vector ──────────────────────────────────────────────
+
+
+# Golden input/output pair for end-to-end pipeline verification.
+@dataclass
+class ReferenceTestVector:
+    input_state: List[float] = field(default_factory=list)
+    input_prompt: str = ""
+    input_images_hash: Dict[str, str] = field(default_factory=dict)  # {cam_key: sha256}
+    input_images_path: Optional[str] = None
+    expected_output: List[List[float]] = field(default_factory=list)  # (horizon, action_dim)
+    tolerance: float = 1e-4
+    torch_seed: int = 0
+    notes: Optional[str] = None
+
+
+# ── normalization round-trip ───────────────────────────────────────────
+
+
+# Result of normalize → unnormalize on a known input, verifying invertibility.
+@dataclass
+class NormRoundTripResult:
+    step_name: str = ""                           # which transform_pipeline step
+    max_abs_error: float = 0.0
+    within_clip_bound: bool = True
+    input_source: str = ""                        # "reference_test_vector" | "training_dataset_sample"
+    status: str = "pass"                          # "pass" | "fail"
+
+
+# ── known_issues ───────────────────────────────────────────────────────
+
+
+@dataclass
+class KnownIssue:
+    id: str = ""
+    severity: str = "warning"                     # "critical" | "warning" | "info"
+    description: str = ""
+    workaround: Optional[str] = None
+    check_type: str = "static"                    # "static" or "dynamic"
 
 
 # ── Top-level passport ──────────────────────────────────────────────────
@@ -451,7 +519,7 @@ class GeneratedBy:
 # versions so a v0.1 reader can round-trip a v0.2 passport without data loss.
 @dataclass
 class ModelPassport:
-    """Complete v0.1 passport at the checkpoint root."""
+    """Complete v0.2 passport at the checkpoint root."""
 
     schema_version: str = SCHEMA_VERSION
     generated_by: GeneratedBy = field(default_factory=GeneratedBy)
@@ -464,6 +532,10 @@ class ModelPassport:
     output_spec: OutputSpec = field(default_factory=OutputSpec)
     weight_integrity: WeightIntegrity = field(default_factory=WeightIntegrity)
     provenance: Provenance = field(default_factory=Provenance)
+    transform_pipeline: List[TransformStep] = field(default_factory=list)
+    reference_test_vector: Optional[ReferenceTestVector] = None
+    norm_round_trip_results: List[NormRoundTripResult] = field(default_factory=list)
+    known_issues: List[KnownIssue] = field(default_factory=list)
 
     extra_sections: Dict[str, Any] = field(default_factory=dict)
 
@@ -476,13 +548,17 @@ class ModelPassport:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> ModelPassport:
-        # Pull out known top-level keys; remainder goes into extra_sections.
         known_top = {
             "schema_version", "generated_by", "generated_at", "stack",
             "input_contract", "model_identity", "model_internals",
             "output_spec", "weight_integrity", "provenance",
+            "transform_pipeline", "reference_test_vector",
+            "norm_round_trip_results", "known_issues",
         }
         extras = {k: v for k, v in data.items() if k not in known_top}
+
+        mi_data = data.get("model_identity")
+        model_identity = _model_identity_from_dict(mi_data)
 
         return cls(
             schema_version=data.get("schema_version", SCHEMA_VERSION),
@@ -490,11 +566,27 @@ class ModelPassport:
             generated_at=data.get("generated_at"),
             stack=data.get("stack"),
             input_contract=_input_contract_from_dict(data.get("input_contract")),
-            model_identity=_dict_to_dataclass(ModelIdentity, data.get("model_identity")),
+            model_identity=model_identity,
             model_internals=_model_internals_from_dict(data.get("model_internals")),
             output_spec=_output_spec_from_dict(data.get("output_spec")),
             weight_integrity=_weight_integrity_from_dict(data.get("weight_integrity")),
             provenance=_dict_to_dataclass(Provenance, data.get("provenance")),
+            transform_pipeline=[
+                _dict_to_dataclass(TransformStep, s)
+                for s in data.get("transform_pipeline", []) or []
+            ],
+            reference_test_vector=(
+                _dict_to_dataclass(ReferenceTestVector, data["reference_test_vector"])
+                if data.get("reference_test_vector") else None
+            ),
+            norm_round_trip_results=[
+                _dict_to_dataclass(NormRoundTripResult, r)
+                for r in data.get("norm_round_trip_results", []) or []
+            ],
+            known_issues=[
+                _dict_to_dataclass(KnownIssue, ki)
+                for ki in data.get("known_issues", []) or []
+            ],
             extra_sections=extras,
         )
 
@@ -569,13 +661,25 @@ def _dict_to_dataclass(dc_cls, data):
     return dc_cls(**kwargs)
 
 
+def _action_spec_from_dict(data) -> Optional[ActionSpec]:
+    if not data or not isinstance(data, dict):
+        return None
+    spec = _dict_to_dataclass(ActionSpec, data)
+    dd = data.get("delta_dims")
+    if dd and isinstance(dd, dict):
+        spec.delta_dims = _dict_to_dataclass(DeltaSpec, dd)
+    elif dd and isinstance(dd, str):
+        spec.delta_dims = DeltaSpec(absolute_dims_reason=dd)
+    return spec
+
+
 def _input_contract_from_dict(data) -> InputContract:
     if data is None:
         return InputContract()
     return InputContract(
         images=[_dict_to_dataclass(ImageSpec, i) for i in data.get("images", []) or []],
         state=_dict_to_dataclass(StateSpec, data.get("state")) if data.get("state") else None,
-        actions=_dict_to_dataclass(ActionSpec, data.get("actions")) if data.get("actions") else None,
+        actions=_action_spec_from_dict(data.get("actions")),
         language=_dict_to_dataclass(LanguageSpec, data.get("language")) if data.get("language") else None,
         temporal=_dict_to_dataclass(TemporalSpec, data.get("temporal")) if data.get("temporal") else None,
         training_datasets=[
@@ -585,6 +689,16 @@ def _input_contract_from_dict(data) -> InputContract:
     )
 
 
+def _model_identity_from_dict(data) -> ModelIdentity:
+    if data is None:
+        return ModelIdentity()
+    mi = _dict_to_dataclass(ModelIdentity, data)
+    rc_data = data.get("runtime_constraints")
+    if rc_data and isinstance(rc_data, dict):
+        mi.runtime_constraints = _dict_to_dataclass(RuntimeConstraints, rc_data)
+    return mi
+
+
 def _model_internals_from_dict(data) -> ModelInternals:
     if data is None:
         return ModelInternals()
@@ -592,7 +706,6 @@ def _model_internals_from_dict(data) -> ModelInternals:
     params_data = data.get("parameters", {}) or {}
     parameters = ParametersBlock(
         summary=_dict_to_dataclass(ParametersSummary, params_data.get("summary")),
-        by_name=[_dict_to_dataclass(ParameterEntry, p) for p in params_data.get("by_name", []) or []],
     )
 
     return ModelInternals(
@@ -655,8 +768,8 @@ def _weight_integrity_from_dict(data) -> WeightIntegrity:
 # ── Schema version compatibility table ──────────────────────────────────
 
 
-SUPPORTED_PASSPORT_VERSIONS = {"0.1"}
-SUPPORTED_SIGNOFF_VERSIONS = {"0.1"}
+SUPPORTED_PASSPORT_VERSIONS = {"0.2"}
+SUPPORTED_SIGNOFF_VERSIONS = {"0.2"}
 
 
 def is_passport_version_supported(version: str) -> bool:

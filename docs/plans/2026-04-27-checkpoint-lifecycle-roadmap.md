@@ -426,12 +426,22 @@ checkpoints.
 
 ### Step 1: Inventory What Eval Capability Actually Exists
 
-Status: not done.
+Status: done.
 
-Do this before choosing metrics, writing promotion rules, or running a
-checkpoint trial. There has not been any deliberate prep for evals yet. The
-MissionTracker backtest code in `../alpha-robotics` is legacy code and should
-be treated as a candidate backend, not as a ready pipeline.
+What already happened (2026-04-28):
+
+- Full assessment in `docs/plans/2026-04-28-step1-missiontracker-eval-readiness.md`.
+- MissionTracker's `MultiTaskDiTAdapter` was extended to support DiT checkpoints
+  with RAMEN normalization (Steps 1.1-1.6 of the sub-plan).
+- `from_pretrained` loads the DiT policy, detects RAMEN vs LeRobot stats format,
+  and routes to the correct normalization path.
+- `predict()` runs a full forward pass on `dit_block_tower_norm_fix` with correct
+  output shapes and no NaN. Delta-to-absolute conversion is implemented.
+- Verdict: `usable_with_small_adapter` (the adapter we built).
+- Remaining debts (transformers pin/shim, PYTHONPATH ROS leak guard, n_obs_steps
+  queue logic) do not block Step 6.
+
+Previously:
 
 Actions:
 
@@ -472,10 +482,16 @@ Exit criteria:
 
 ### Step 2: Choose One Checkpoint For A Manual Trial
 
-Status: not done.
+Status: done.
 
-Pick one recent checkpoint that has completed training or is close enough to
-exercise the lifecycle.
+What already happened (2026-04-28):
+
+- Selected `dit_block_tower_norm_fix` (HF: `pravsels/dit_block_tower_norm_fix`).
+- Local path: `../alpha-robotics/checkpoints/dit_block_tower_norm_fix/`.
+- W&B: `https://wandb.ai/pravsels/dit_block_tower_norm_fix/runs/ksuxe451`.
+- Training repo commit: `af0a43a512841aa1f4d6bb2f93755e5358dca8cb`.
+
+Previously:
 
 Actions:
 
@@ -506,9 +522,29 @@ Exit criteria:
 
 ### Step 3: Make The Checkpoint A Signed Artifact
 
-Status: not done.
+Status: done.
 
-Do not run eval until the checkpoint has a passport and signoff.
+What already happened (2026-04-28):
+
+- Passport schema revised from v0.1 to v0.2 (plan:
+  `docs/plans/2026-04-28-passport-v02-revision.md`).
+- v0.1 passport (170KB) deleted and regenerated as v0.2 (22KB, 87% smaller).
+- Key v0.2 additions: 12-step `transform_pipeline`, `runtime_constraints`,
+  structured `DeltaSpec`, `known_issues` (3 entries), `observation_delta_indices`,
+  camera identity fields on `ImageSpec`, checkpoint lineage on `Provenance`.
+- Key v0.2 removals: `parameters.by_name` (130KB), module_hierarchy slimmed to
+  top 2 levels.
+- New validator checks: `runtime_constraints` (PASS), `reference_test_vector`
+  (SOFT_SIGNAL — not yet populated, needs GPU inference),
+  `camera_identity` (SOFT_SIGNAL — hardware metadata not yet captured).
+- Signed with 4 soft signals documented:
+  `state_dim_consistency` (rot6d 13→16 intentional),
+  `reference_test_vector` (not yet populated),
+  `camera_identity` (not yet captured),
+  `training_datasets_resolvable` (commit SHA not captured at train time).
+- Full validation: 23 passed, 4 soft signals, 0 failures.
+
+Previously:
 
 Actions:
 
@@ -549,7 +585,7 @@ Exit criteria:
 
 ### Step 4: Establish The Exact Snapshot To Evaluate
 
-Status: not done.
+Status: not done. ← resume here.
 
 The eval should run against the same artifact a downstream consumer would load,
 not an ambiguous local directory.
