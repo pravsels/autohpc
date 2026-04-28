@@ -688,7 +688,48 @@ Exit criteria:
 
 ### Step 6: Run One Offline Eval If Step 1 Found A Usable Backend
 
-Status: not done. ← resume here.
+Status: done.
+
+What already happened (2026-04-28):
+
+- MissionTracker was usable after three targeted fixes:
+  1. `BacktestConfig` gained `stats_path` field to pass external RAMEN
+     normalization stats to the `MultiTaskDiTAdapter`.
+  2. `backtest.py` passes `stats_path` through to `load_policy_adapter` in the
+     `multitask_dit` branch.
+  3. `run_backtest.py` wires `POLICY_ARCHITECTURE`, `STATS_PATH`, and
+     `DEFAULT_LANGUAGE_INSTRUCTION` from the JSON config into `BacktestConfig`.
+- A critical state-assembly bug was fixed in `backtest.py`: the DiT policy's
+  `dataset_schema` declares separate `observation.state` (7D joint) and
+  `observation.eef_6d_pose` (6D → 9D via RPY-to-rot6d) sub-features that must
+  be concatenated to the 16D state the model expects. The backtest's
+  `_run_policy` previously picked a single state key, so a new
+  `_assemble_dit_state` method was added to assemble the full 16D vector
+  matching the training pipeline's `dataset_adapter.assemble_vector` logic.
+- `RoboCandyWrapper` submodule updated to `c9481ed` (lerobot 0.5.2 support).
+- `scikit-learn` installed for MissionTracker's `ClusterAnalyser`.
+- Backtest config: `missiontracker/examples/configs/dit_block_tower_smallest.json`.
+- Validation dataset: `villekuosmanen/build_block_tower_val`, episode 0 (557 frames).
+- Policy path: `checkpoints/dit_block_tower_norm_fix/checkpoints/29000/params`.
+- Stats path: `checkpoints/dit_block_tower_norm_fix/assets/ramen_stats.json`.
+- Language instruction: "build a block tower".
+- Results:
+  - 557 frames, 117 anomalies (21.0% anomaly rate).
+  - `VALIDATION_LOSS_TOO_HIGH`: 112 frames.
+  - `INCOHERENT_ACTION_PREDICTIONS`: 5 frames.
+  - `policy_loss`: mean=0.0066, p50=0.0033, p95=0.023, max=0.080.
+  - `max_joint_delta`: mean=0.034, p50=0.032, p95=0.072, max=0.087.
+  - `time_coherence`: mean=0.0015, very temporally coherent.
+  - `perturbation_coherence`: N/A for multitask_dit.
+  - Cluster analysis: no policy activations collected (DiT adapter doesn't
+    expose forward hooks yet).
+- Artefact: `eval_outputs/artefacts/build_block_tower_val_params.tar.gz`.
+- Key observation: the 21% anomaly rate is dominated by validation-loss
+  anomalies. The validation loss threshold is calibrated for ACT/RewACT
+  policies; DiT may need its own threshold. This does NOT indicate the model
+  is broken — Step 5's cheap checks confirmed plumbing is intact.
+
+Previously:
 
 If MissionTracker is usable, run the smallest possible backtest. If it is not
 usable, do not pretend eval exists; write the gap and stop here.
@@ -720,7 +761,17 @@ Exit criteria:
 
 ### Step 7: Write The First Eval Log
 
-Status: not done.
+Status: done.
+
+What already happened (2026-04-28):
+
+- Eval log written to `alpha-robotics/eval_logs/dit_block_tower_norm_fix/2026-04-28-backtest-eval.md`.
+- Covers: checkpoint identity, signed artifacts, source run, eval backend,
+  dataset, cheap behavior evidence (Step 5), backtest results (Step 6),
+  qualitative review (not performed — flagged for human), and eval verdict.
+- Verdict: `needs_more_eval`. Model passes all cheap gates and produces
+  plausible actions, but anomaly thresholds need DiT-specific calibration,
+  more episodes should be tested, and human qualitative review is pending.
 
 Actions:
 
@@ -746,7 +797,18 @@ Exit criteria:
 
 ### Step 8: Write The First Promotion Note
 
-Status: not done.
+Status: done (pending human approval of promotion action).
+
+What already happened (2026-04-28):
+
+- Promotion note written to
+  `alpha-robotics/eval_logs/dit_block_tower_norm_fix/2026-04-28-promotion-note.md`.
+- Drafted action: `needs_more_eval`.
+- Key rationale: checkpoint passes all hard gates and produces healthy metrics,
+  but evidence base is too narrow (1 episode, no DiT-calibrated thresholds, no
+  human qualitative review) for `promote_to_sim`.
+- Next action: multi-episode backtest with calibrated thresholds, then human
+  qualitative review.
 
 Actions:
 
@@ -769,55 +831,86 @@ Exit criteria:
 
 - The checkpoint has a clear next justified action.
 
-### Step 9: Repeat On A Small Batch
+### Step 9: Simulation Evaluation
 
-Status: not done.
+Status: deferred (pending sim environment research).
 
-After one checkpoint works end to end, repeat Steps 2-8 on 3-5 checkpoints from
-one training family.
+Simulation provides two signals that val loss cannot:
 
-Actions:
+1. **Rejection signal** — does the policy do obviously bad things (crash into
+   the table, freeze, miss the workspace, drop objects)? A policy that fails
+   in sim is very likely bad. Strong negative evidence.
+2. **Ranking signal** — given N candidate policies, does the sim ranking
+   correlate with real-world ranking? Even with a sim-to-real gap, relative
+   ordering may transfer. This makes sim useful for comparing policies within
+   the same architecture/task family without burning robot time.
 
-1. Use the same artifact gate.
-2. Use the same cheap behavior checks.
-3. Use the same eval backend and pinned data if available.
-4. Write eval logs and promotion notes consistently.
-5. Compare whether the promotion vocabulary separates the checkpoints clearly.
-6. Record which fields were useful, missing, noisy, or repetitive.
+Simulation is not a real-world guarantee. Sim-to-real gap means a sim-passing
+policy can still fail on hardware. Treat sim as a filter and a ranker, not a
+certifier.
 
-Output:
+Inputs:
 
-- A small batch of eval logs and promotion notes.
-- A short retrospective on what should change.
+- Signed checkpoint with passing artifact gate.
+- Eval log from Step 7 with verdict `needs_more_eval` or better.
+- A sim environment that can run the task (to be determined).
+- Task specification: success criteria, episode length, reset conditions.
+- The policy's input contract (from passport) to ensure correct feeding in sim.
 
-Exit criteria:
+Outputs:
 
-- The team can explain why each checkpoint was rejected, held, promoted to sim,
-  or promoted to preflight.
+- Success rate over N episodes (N >= 20-50 to be meaningful).
+- Per-episode: task success (binary), time to completion, failure mode
+  classification (if failed).
+- Representative video rollouts: at least 1 success and 1 failure.
+- Optional: contact forces, workspace violations, sim-specific safety metrics.
+- A sim eval log (same structure as backtest eval log, different backend).
+
+Use cases:
+
+- *Single policy triage*: does it control the robot sensibly at all? If success
+  rate is near zero, that is a strong reject signal.
+- *Policy ranking*: run the same sim eval on multiple policies, rank by success
+  rate. Use to pick which policies are worth real robot time. The ranking
+  hypothesis (sim ranking holds in real) should be validated once real-world
+  comparison data exists.
+
+Promotion interaction:
+
+- A passing sim eval supports `promote_to_preflight`.
+- A failing sim eval is strong evidence for `reject` or `needs_more_eval`.
+
+Open questions:
+
+- Which sim environment and physics engine for the target robot platform.
+- How to define task success programmatically (object pose checks, contact
+  sensors, etc.).
+- What success rate threshold justifies `promote_to_preflight` vs
+  `needs_more_eval`.
+- Whether to run sim on the same machine or offload (GPU sim vs CPU sim).
+- How to validate that sim ranking transfers to real (needs real-world
+  comparison data).
 
 ### Step 10: Update Skills Only After The Manual Trial
 
-Status: not done.
+Status: deferred.
+
+Still in the manual phase — one checkpoint has been triaged end-to-end but
+skills should not be updated until the workflow has been repeated enough times
+to know what's stable. The learnings from this first pass are recorded in the
+roadmap itself (Steps 4-8) and in the eval log and promotion note under
+`alpha-robotics/eval_logs/dit_block_tower_norm_fix/`.
+
+When ready, the key things to codify in skills are:
+
+- MissionTracker backtest config format and DiT-specific gotchas (state
+  assembly, RAMEN stats path, loss dims, threshold calibration).
+- Promotion vocabulary and note template.
+- The eval log checklist (what to record after a backtest).
+
+Previously:
 
 Only update operational docs after Steps 1-9 expose what actually works.
-
-Likely edits:
-
-- Add post-HF triage guidance to `eval-tracking/SKILL.md`.
-- Add promotion-note guidance either to `eval-tracking/SKILL.md` or a new
-  `checkpoint-promotion/SKILL.md`.
-- Add a phase signal to `README.md` so agents know when to run post-HF triage.
-- Update `hpc-run-tracking/SKILL.md` if HF upload records need to link to eval
-  or promotion notes.
-
-Output:
-
-- Updated operational docs based on evidence, not guesses.
-
-Exit criteria:
-
-- An agent can follow the docs for the second checkpoint batch without reading
-  this roadmap.
 
 ### Step 11: Add Thin Helpers Only If Repetition Is Proven
 
