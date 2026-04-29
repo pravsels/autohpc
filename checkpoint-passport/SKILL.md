@@ -87,6 +87,22 @@ Pure file inspection. You can do this from any host (with the caveat in the tabl
 
 Load the model, walk it, run one forward pass on a synthetic calibration batch. This is the only phase that needs torch / GPU / the model package.
 
+**Finding the right environment.** You need the model's own runtime — not the
+system Python. Discover what's available before proceeding:
+
+```bash
+# micromamba / mamba / conda
+micromamba env list 2>/dev/null || mamba env list 2>/dev/null || conda env list 2>/dev/null
+# virtualenvs in the target repo
+find <target_repo> -maxdepth 3 -name "pyvenv.cfg" -o -name "activate" 2>/dev/null
+# Docker images
+docker images | grep -i "<repo_name_or_model_name>"
+```
+
+If none of these exist, check the target repo's README or setup docs for
+environment creation instructions. If nothing is documented, ask the user —
+do not install dependencies into the system Python or guess at versions.
+
 **Container contract** — these are non-negotiable:
 
 1. **Run inside the model package's own container**, not a generic torch image. The container's torch / CUDA / dependency versions go straight into `model_identity.library_versions`.
