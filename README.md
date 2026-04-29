@@ -7,7 +7,7 @@ Take any AI / ML repo from local Docker build to HPC training and eval — with 
 Clone this repo alongside your target ML repo, then paste this prompt into your AI coding agent:
 
 ```
-Read ../autohpc/README.md. Assess the current phase (see phase table), confirm with user, then follow the matching skill.
+Read ../autohpc/README.md. Assess the current phase (see phase table), confirm with user, then follow the matching skill or README section.
 ```
 
 Adjust the path if your clone location differs.
@@ -67,6 +67,7 @@ When resuming work on a repo, check these signals to determine where you are bef
 | User is about to upload a checkpoint to HF / copy it to an eval box / copy it to a robot / hand it off, and there's no `MODEL_PASSPORT.json` / `SIGNOFF.json` | Post-train — checkpoint passport (gate it first) |
 | Checkpoint dir has a passing `SIGNOFF.json` and the next step is the first run on a robot or inference rig, or a fresh run after hardware / runner / checkpoint changes | Post-passport — deployment protocol |
 | Checkpoint dir has a passing `SIGNOFF.json` and `eval_logs/` has eval logs with metrics | Ongoing — eval tracking |
+| Signed checkpoint needs a structured quality verdict and promotion decision (not just one-off eval logs) | Checkpoint triage (below — no separate SKILL.md) |
 
 Report what you find and your best guess to the user (e.g. "Dockerfile exists and builds, slurm scripts are present, run_logs/ has 12 logged runs — looks like you're in the ongoing phase. Are you still focused on replication baselines, or are you now in experimentation mode?"). Wait for confirmation before continuing — the signals above are heuristics, and the user may know better (e.g. the image builds but is stale, run_logs exist from a previous attempt that was abandoned, or experiment logs exist even though the current goal is still baseline replication).
 
@@ -155,6 +156,142 @@ Once a checkpoint has a passing `SIGNOFF.json`, evaluating it is a separate, ong
 - Create an eval log in `eval_logs/` for each evaluation.
 - Record provenance (which checkpoint, which data), metrics, qualitative assessment, and verdict.
 - The eval harness loads the checkpoint via the passport's `input_contract` — confirm `validate-checkpoint <ckpt_dir> --require-signoff` is part of the eval-job startup so a missing or stale signoff fails fast.
+
+### Checkpoint triage
+
+When a signed checkpoint needs a structured quality verdict — not just another
+eval log, but a decision about what should happen next (more eval, simulation,
+deployment preflight, or rejection) — follow this procedure. There is no
+separate SKILL.md for triage; the procedure lives here and references the
+passport and eval-tracking skills for the individual steps.
+
+**When this applies vs. "Ongoing — eval tracking":** eval tracking is for
+recording individual evaluations. Checkpoint triage is the end-to-end flow
+that produces a **promotion note** — a checkpoint-level decision informed by
+one or more eval logs. If you already have eval logs and need a promotion
+decision, start at step 5 below.
+
+#### Environment setup
+
+Before running any triage commands:
+
+1. Install passport tools (once per environment):
+
+   ```bash
+   uv pip install -e ../autohpc/checkpoint-passport
+   ```
+
+2. Activate the target ML repo's Python environment. Use whatever the repo
+   provides — micromamba, uv, venv, Docker. The model's own dependencies
+   (torch, transformers, diffusers, etc.) must be available.
+
+3. Guard against PYTHONPATH contamination. If the host shell exports
+   incompatible site-packages (e.g. `/opt/ros/*/python3.x/site-packages`
+   leaking into a different Python version), `unset PYTHONPATH` before
+   running model code.
+
+4. Check the passport's `runtime_constraints.required_versions` (if present)
+   against the current environment before loading the model. Library version
+   drift — especially `transformers` — is a known failure mode that wastes
+   debugging time when the passport already has the answer.
+
+#### Triage procedure
+
+1. **Locate the checkpoint** and confirm training evidence is intact (W&B run,
+   run log, config snapshot). If evidence is missing, stop and ask.
+
+2. **Generate passport** if `MODEL_PASSPORT.json` does not exist — follow
+   `checkpoint-passport/SKILL.md`. This requires the model's own
+   container with GPU access for Phase 2 (dynamic extraction / smoke tests).
+
+3. **Validate and sign** — follow `checkpoint-passport/SKILL.md` Phases 3-4.
+
+4. **Establish the exact eval snapshot.** Either upload to HF and record the
+   revision, or pin a local snapshot. Record the HF repo/revision or local
+   path so there is no ambiguity about which bytes the eval consumes.
+
+5. **Artifact gate:**
+
+   ```bash
+   validate-checkpoint <ckpt_dir_or_snapshot> --require-signoff
+   ```
+
+   Non-zero exit means stop. Record passport and signoff sha256 hashes.
+
+6. **Cheap behavior checks.** Inspect the passport's `output_spec.smoke_results`
+   (determinism, NaN/Inf, liveness, distribution, range). Optionally run a
+   fresh single-batch forward pass through the target repo's public inference
+   path and check output shapes, dtypes, value ranges, and liveness. This
+   catches catastrophic brokenness, not task quality.
+
+7. **Offline backtest** via MissionTracker (see below). If no usable eval
+   backend exists, write an explicit eval-gap note and stop — do not skip
+   this step silently.
+
+8. **Write an eval log** — follow `eval-tracking/SKILL.md`.
+
+9. **Write a promotion note** — follow the promotion notes section in
+   `eval-tracking/SKILL.md`. This is the output of triage: a structured
+   decision with evidence, not just metrics.
+
+#### MissionTracker backtests
+
+MissionTracker is the primary offline eval backend. It lives in the target ML
+repo under `missiontracker/` and is not pip-installable — import it via
+`sys.path` from the repo checkout.
+
+**Config format.** Create a JSON config under
+`missiontracker/examples/configs/`. Required fields:
+
+- `VAL_DATASET_REPO_IDS` — HF dataset repo IDs (LeRobot format).
+- `POLICY_PATHS` — HF repo IDs or local checkpoint paths.
+- `VAL_EPISODES` — pin specific episodes for reproducibility, or `null` for all.
+
+Architecture-specific fields (set as needed):
+
+- `POLICY_ARCHITECTURE` — e.g. `"multitask_dit"`, `"act"`, `"rewact"`, `"openpi"`.
+- `STATS_PATH` — path to normalization stats if the architecture needs external
+  stats (e.g. RAMEN-format `ramen_stats.json`).
+- `DEFAULT_LANGUAGE_INSTRUCTION` — text prompt for language-conditioned policies.
+
+Set optional auxiliary model fields (`POLICY_SMALL_PATH`, `SAE_MODEL_REPO_ID`,
+`REWARD_AE_PATH`, etc.) to `null` to disable extra checks you don't need.
+
+**Running:**
+
+```bash
+cd <target_repo>/missiontracker/examples
+python run_backtest.py configs/<your_config>.json
+```
+
+**Output.** A compressed artefact tarball under `eval_outputs/artefacts/`
+containing `metrics.json`, `summary.json`, per-episode parquet files, and
+videos. Key metrics to record in the eval log:
+
+- `policy_loss` (mean, p50, p95) — primary reconstruction quality signal.
+- `max_joint_delta` — action smoothness.
+- `time_coherence` — temporal consistency of predictions.
+
+**Caveats:**
+
+- **Anomaly thresholds are architecture-specific.** Default thresholds are
+  calibrated for the architecture family they were tuned on. For a new
+  architecture or checkpoint family, use raw `metrics.json` numbers and
+  ignore `summary.total_anomalies` until thresholds have been calibrated.
+- **Stats format.** Checkpoints may ship LeRobot-format `dataset_stats.json`
+  or RAMEN-format `ramen_stats.json`. The adapter detects the format
+  automatically, but record which format was used in the eval log.
+- **HF revision not recorded.** MissionTracker records `policy_path` but not
+  the HF revision. Pin the revision externally before running and record it
+  in the eval log.
+- **Passport-blind feeding.** MissionTracker feeds the model from training
+  dataset stats, not from the passport's `input_contract`. Record both the
+  passport's `input_contract.training_datasets[]` and the dataset
+  MissionTracker actually loaded in the eval log, so any divergence is
+  visible.
+- **Open-loop only.** This is offline replay (predicted vs ground-truth
+  actions), not closed-loop simulation. Do not conflate backtest results
+  with simulation evidence.
 
 ### After replication baselines are stable
 
