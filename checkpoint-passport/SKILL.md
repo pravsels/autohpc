@@ -214,6 +214,14 @@ Non-zero exit = do not ship.
 | Dry-run sign (print, don't write) | `sign-checkpoint <ckpt> --dry-run` |
 | Deployment gate | `validate-checkpoint <ckpt> --require-signoff` |
 
+## After Signing
+
+Once the checkpoint has a passing signoff, the passport's job is done. The next steps depend on the goal — follow the README's phase table to determine which applies:
+
+- **Evaluate the checkpoint** → follow `eval-tracking/SKILL.md` for eval logs and promotion notes.
+- **Full triage (passport → eval → promotion decision)** → return to the README's "Checkpoint triage" section and resume at step 4.
+- **Deploy to a robot or inference rig** → follow `deployment-protocol/SKILL.md`.
+
 ## Common Mistakes
 
 - **Skipping the passport because the checkpoint is "for internal use"** — the whole point is detecting drift, and "internal" use cases drift fastest because no one is paying attention.

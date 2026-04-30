@@ -116,6 +116,8 @@ A one-liner recommendation. This is the first thing someone reads when they open
 
 If the verdict marks the checkpoint as deploy-ready, the passport is already in place (it was generated post-train, before this eval ran) and the same `validate-checkpoint <ckpt_dir> --require-signoff` gate the eval harness used will gate the next consumer too. The verdict here is purely about *performance*; the *intact files + known feeding contract* story was already settled by the signoff.
 
+Once you have one or more eval logs with verdicts, write a **promotion note** (see below) to make the checkpoint-level decision: what should happen next?
+
 ## Promotion Notes
 
 A promotion note is a **checkpoint-level decision** informed by one or more eval
