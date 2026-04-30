@@ -159,11 +159,14 @@ Once a checkpoint has a passing `SIGNOFF.json`, evaluating it is a separate, ong
 
 ### Checkpoint triage
 
+Unlike the other phases above (which each map to a single skill), triage is a
+**multi-step workflow that chains several skills in order**. This section is
+the checklist — follow it top to bottom, jumping into each referenced skill
+as needed and returning here for the next step.
+
 When a signed checkpoint needs a structured quality verdict — not just another
 eval log, but a decision about what should happen next (more eval, simulation,
-deployment preflight, or rejection) — follow this procedure. There is no
-separate SKILL.md for triage; the procedure lives here and references the
-passport and eval-tracking skills for the individual steps.
+deployment preflight, or rejection) — follow this procedure.
 
 **When this applies vs. "Ongoing — eval tracking":** eval tracking is for
 recording individual evaluations. Checkpoint triage is the end-to-end flow
