@@ -49,6 +49,31 @@ Treat preflight as a comparison across three sources of truth:
 
 The agent's job is to line these up and prove that they agree.
 
+## Hybrid Preflight (Validator + Agent)
+
+Preflight is hybrid. `validate-checkpoint` owns deterministic artifact and
+schema checks: signoff hashes, required files, runtime version constraints,
+state/action dimensions, dtype summaries, smoke-test buckets, reference test
+vectors, and normalization round-trip results. The deployment protocol owns
+the contextual chain checks that code cannot fully decide: which live or replay
+source is bound to each passport key, whether a camera view semantically
+matches the declared mount, whether a target runner's adapter actually applies
+the declared transforms, and whether the final would-be command has the
+expected robot semantics.
+
+Do not blur those responsibilities. Run the validator first and record its
+coverage, then run the ten-element chain audit to cover the semantic and
+runtime gaps. If a mismatch could have been caught deterministically, record it
+as validator backlog. If it requires live context or judgment, record it as
+procedure backlog.
+
+Hard validator failures are terminal for this preflight. If
+`validate-checkpoint <ckpt> --require-signoff` exits non-zero or reports any
+hard failure, Element 4 fails: set the final verdict to `FAIL`, stop before
+model load or dry-run, and mark all later chain elements `unreached`. A later
+successful model load, forward pass, or replay dry-run cannot override a failed
+checkpoint identity/integrity gate.
+
 ## Preflight Rubric
 
 Use this rubric explicitly.
@@ -209,6 +234,10 @@ defined in the rubric. For each element, record:
 
 #### Element 1: Source identity
 
+Validator support: none beyond passport fields such as camera serials or
+reference-frame paths. Agent responsibility: identify the actual live device,
+topic, replay dataset, log, sample ID, timestamp, and any local binding layer.
+
 - in `live-rig` mode, identify exactly which camera, sensor, topic, device,
   or stream is bound to each logical source
 - in `replay` mode, identify exactly which dataset, log, recording, sample
@@ -217,6 +246,10 @@ defined in the rubric. For each element, record:
   source again later
 
 #### Element 2: Raw source sample
+
+Validator support: expected shapes, dtypes, value ranges, and camera metadata
+from the passport. Agent responsibility: inspect at least one raw sample before
+preprocessing and compare it to those expectations.
 
 - inspect at least one raw sample per source before trusting the rest of the
   run
@@ -227,6 +260,10 @@ defined in the rubric. For each element, record:
 
 #### Element 3: Source-to-passport bindings
 
+Validator support: declared image keys, state sub-keys, rename maps, temporal
+indices, and camera identity fields. Agent responsibility: prove each observed
+source maps to exactly one passport input and that any remap layer is explicit.
+
 - every passport image key and state sub-key has exactly one source
 - units, coord frames, timing, ordering, and history expectations match the
   passport
@@ -236,6 +273,15 @@ defined in the rubric. For each element, record:
   gap instead of pretending the top of the chain was checked
 
 #### Element 4: Checkpoint identity and integrity
+
+Validator support: this is the strongest static stage. Run
+`validate-checkpoint <ckpt> --require-signoff` and record hard failures, soft
+signals, and not-checked rows. Agent responsibility: confirm the target runner
+is pointed at the same checkpoint bundle the validator checked.
+
+If the validator reports any hard failure, stop here. Do not inspect the runner,
+load the model, or run a dry-run to "see if it still works." This element has
+failed, the final verdict is `FAIL`, and elements 5-10 are `unreached`.
 
 - checkpoint has a valid passport and signoff
 - deployment bindings point at the intended checkpoint, passport, and signoff
@@ -248,6 +294,11 @@ not preflight.
 
 #### Element 5: Runtime model load path and model internals
 
+Validator support: class/module resolution, required package versions, Python
+constraint, dtype breakdown, state-dict completeness, and smoke-test buckets.
+Agent responsibility: confirm the deployment runner did not bypass this loader,
+silently cast dtype, or fall back to another class path.
+
 - runner is loading the intended checkpoint path
 - actual class/module path used at runtime matches the passport
 - actual dtype used at runtime matches the passport
@@ -257,6 +308,11 @@ not preflight.
   dtype, that is a fail
 
 #### Element 6: Preprocessing and transformation steps
+
+Validator support: transform-pipeline declarations, norm stats fingerprints,
+reference test vector, and normalization round-trip results. Agent
+responsibility: trace the actual runner path from raw sample to model-facing
+tensors and name every adapter or transform layer.
 
 - trace the transformations from raw source sample toward model input
 - confirm resize, crop, dtype conversion, color order, layout changes,
@@ -269,6 +325,10 @@ not preflight.
 
 #### Element 7: Final model input contract
 
+Validator support: expected keys, shapes, dtypes, temporal axes, and value
+ranges. Agent responsibility: capture what the model actually received in the
+target runner and compare it against the passport, not just against config.
+
 - capture the actual tensors or structured inputs presented to the model
 - record model input keys, shapes, dtypes, sequence/history axes, and value
   summaries
@@ -279,6 +339,11 @@ not preflight.
 
 #### Element 8: Model output shape and value sanity
 
+Validator support: smoke-test liveness, distribution, range, determinism, and
+NaN/Inf buckets. Agent responsibility: run one no-emit dry run through the
+target path and record the actual output shape, dtype, range, and obvious
+sanity.
+
 - run one safe dry-run inference through the target repo's real preprocessing
   and model code
 - record output keys, shapes, dtypes, and simple value sanity
@@ -286,6 +351,11 @@ not preflight.
   expectations closely enough to continue
 
 #### Element 9: Output unnormalization and post-processing
+
+Validator support: declared post-processing, action dims, delta mask, norm
+mask, normalization round-trip, and expected range. Agent responsibility:
+confirm the target runner applies the same unnormalize, clipping, smoothing,
+and delta-to-absolute behavior before command formation.
 
 - confirm output-side unnormalization and post-processing match what the
   deployment path is expected to do
@@ -295,6 +365,11 @@ not preflight.
   reconstruction steps, check them here
 
 #### Element 10: Would-be emission behavior
+
+Validator support: action shape, horizon, control rate, and latency fields.
+Agent responsibility: prove the run is no-emit, name the publish/actuation path
+that would have been used, and confirm the payload semantics match the robot
+controller.
 
 - confirm the final would-be emitted action has the expected shape and
   semantics
@@ -349,6 +424,11 @@ Capture the facts that tell another engineer exactly what was checked:
 - checkpoint path
 - passport path
 - signoff path
+- validator command and exit code
+- validator report path, if generated
+- validator hard failures, soft signals, and not-checked rows
+- explicit statement of whether each trial fault was caught by validator,
+  deployment protocol, agent judgment, or missed
 - norm stats / aux artifact paths used by the run
 - replay dataset/log path plus stable sample identifiers if replay was used
 
@@ -391,6 +471,12 @@ Say plainly:
 - which elements were unreached and why
 - what must be done before the next preflight
 - if replay was used, what still remains to be checked on the live rig
+
+Separate gaps into:
+
+- validator gaps: deterministic checks that should become code
+- schema/passport gaps: missing contract fields needed for a future check
+- procedure gaps: agent/deployment instructions that need to become clearer
 
 Prefer storing it near the deployment work, for example under
 `preflight_audits/` in the target repo or deployment notes area.
@@ -538,6 +624,21 @@ actually exercised and evidenced.
 | Output reconstruction | actual unnorm / post-process behavior |
 | Emission safety | no-emit path plus would-be publish path |
 | Verdict | `PASS (live)` / `PASS (replay, provisional)` / `FAIL` / `NOT RUN` |
+
+## Validator Coverage Map
+
+When `validate-checkpoint` can produce a coverage report, include it in the
+preflight artifact. Until then, create a manual coverage note with three lists:
+
+- `covered_static`: validator checks that ran and passed or failed.
+- `not_checked_static`: schema paths that should be deterministic but were not
+  checked by the current validator.
+- `requires_agent`: schema paths or chain claims that require live context,
+  semantic judgment, or target-runner inspection.
+
+The preflight verdict must not imply that `not_checked_static` paths were
+validated. If an adversarial trial exposes a missed deterministic fault, add a
+validator-kernel backlog item naming the exact schema path and failure mode.
 
 ## Minimal Code Rule
 

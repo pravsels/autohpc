@@ -930,7 +930,18 @@ Exit criteria:
 
 ### Step 12: Adversarial Inference Run
 
-Status: deferred.
+Status: `plan written` — split across two executable plans:
+
+- `docs/plans/2026-05-01-adversarial-inference-run-hybrid-preflight.md`
+  (setup): hybrid preflight framing, schema-driven coverage matrix,
+  deployment-protocol augmentations (Phase 1), trial harness setup
+  (Phase 2), and ranked backlogs.
+- `docs/plans/2026-05-01-adversarial-inference-run-trials.md` (trials):
+  30 fault-injection trials across 4 tiers (Phase 3) and the synthesis
+  writeup (Phase 4).
+
+Execute the setup plan first, then move to the trials plan. Each plan's
+Status section tracks its own phases.
 
 Red-team the passport-based inference protocol. Deliberately introduce one
 fault at a time into a signed checkpoint's environment, then hand it to a
