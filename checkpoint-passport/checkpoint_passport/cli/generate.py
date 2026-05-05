@@ -413,13 +413,52 @@ def _extract_pretrained(config: Dict[str, Any]) -> List[PretrainedAsset]:
     return assets
 
 
+def _extract_training_datasets(
+    config: Dict[str, Any],
+    dataset_repos: Optional[List[str]],
+    loader_classes: Optional[List[str]],
+) -> List[TrainingDatasetSpec]:
+    """Build training_datasets from CLI args, falling back to config.json."""
+    repos = dataset_repos or []
+    loaders = loader_classes or []
+
+    if not repos:
+        # Try common config keys for dataset info
+        cfg_datasets = config.get("datasets") or config.get("dataset")
+        if isinstance(cfg_datasets, list):
+            for entry in cfg_datasets:
+                if isinstance(entry, dict):
+                    repos.append(entry.get("repo") or entry.get("repo_id") or "")
+                    loaders.append(entry.get("loader_class") or "")
+                elif isinstance(entry, str):
+                    repos.append(entry)
+        elif isinstance(cfg_datasets, str):
+            repos.append(cfg_datasets)
+        # Also check dataset_repo_id (single dataset shorthand)
+        if not repos:
+            single = config.get("dataset_repo_id")
+            if single:
+                repos.append(single)
+
+    results = []
+    for i, repo in enumerate(repos):
+        if not repo:
+            continue
+        results.append(TrainingDatasetSpec(
+            repo=repo,
+            loader_class=loaders[i] if i < len(loaders) else None,
+            contributes_to_norm_stats=True,
+        ))
+    return results
+
+
 def generate_passport(
     checkpoint_dir: Path,
     *,
     target_repo: Optional[Path] = None,
     training_repo: Optional[Path] = None,
-    dataset_repo: Optional[str] = None,
-    loader_class: Optional[str] = None,
+    dataset_repos: Optional[List[str]] = None,
+    loader_classes: Optional[List[str]] = None,
 ) -> ModelPassport:
     ckpt = checkpoint_dir.resolve()
 
@@ -469,13 +508,7 @@ def generate_passport(
     language = _extract_language(config)
     temporal = _extract_temporal(config)
 
-    training_datasets = []
-    if dataset_repo:
-        training_datasets.append(TrainingDatasetSpec(
-            repo=dataset_repo,
-            loader_class=loader_class,
-            contributes_to_norm_stats=True,
-        ))
+    training_datasets = _extract_training_datasets(config, dataset_repos, loader_classes)
 
     input_contract = InputContract(
         images=images,
@@ -572,12 +605,9 @@ def main() -> None:
         help="training model repo; populates provenance.training_repo_commit",
     )
     parser.add_argument(
-        "--dataset-repo", type=str, default=None,
-        help="HuggingFace dataset repo id (e.g. user/dataset_name)",
-    )
-    parser.add_argument(
-        "--loader-class", type=str, default=None,
-        help="dataset loader class (e.g. lerobot.datasets.LeRobotDataset)",
+        "--dataset", type=str, action="append", default=None, dest="datasets",
+        help="dataset as repo:loader_class (repeatable), e.g. "
+             "user/dataset:lerobot.datasets.LeRobotDataset",
     )
     parser.add_argument(
         "--out", type=Path, default=None,
@@ -585,12 +615,22 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    dataset_repos: List[str] = []
+    loader_classes: List[str] = []
+    for ds in (args.datasets or []):
+        if ":" in ds:
+            repo, loader = ds.split(":", 1)
+            dataset_repos.append(repo)
+            loader_classes.append(loader)
+        else:
+            dataset_repos.append(ds)
+
     passport = generate_passport(
         args.checkpoint_dir,
         target_repo=args.target_repo,
         training_repo=args.training_repo,
-        dataset_repo=args.dataset_repo,
-        loader_class=args.loader_class,
+        dataset_repos=dataset_repos or None,
+        loader_classes=loader_classes or None,
     )
 
     out_path = args.out or (args.checkpoint_dir / "MODEL_PASSPORT.json")
