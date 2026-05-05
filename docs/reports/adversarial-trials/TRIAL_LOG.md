@@ -33,7 +33,7 @@
 | T1.5 | Passport transformers constraint changed without re-signing | caught_static | 4 | none | [T1.5](trials/T1.5.md) |
 | T1.6 | Passport action horizon changed without re-signing | caught_static | 4 | procedure | [T1.6](trials/T1.6.md) |
 | T2.1 | Wrong model class (V2 with n_action_steps=12) | caught_static | provenance | none (tooling) | [T2.1](trials/T2.1.md) |
-| T2.2 | Null hf_revision without re-signing | pending | 4 | — | [T2.2](trials/T2.2.md) |
+| T2.2 | Null hf_revision without re-signing | caught_static | 4+5 | none | [T2.2](trials/T2.2.md) |
 
 ## Handoff Notes (2026-05-04 evening)
 
