@@ -387,10 +387,11 @@ Injection:
 # slots or remove the previous-frame slot. Record the adapter/config change.
 ```
 
-Expected catch: element 6 or 7. Agent should compare temporal assembly against
-`input_contract.temporal.n_obs_steps` and `observation_delta_indices`.
+Expected catch: `replay-reference-vector` — the golden output was recorded with
+correct temporal stacking; feeding only current frames produces different actions.
 
-Record as gap if: final shapes match but temporal semantics are never checked.
+Record as gap if: replay-reference-vector not run or reference vector uses
+synthetic data that doesn't exercise temporal stacking.
 
 #### T2.4: Delta Action Treated as Absolute
 
@@ -404,11 +405,11 @@ Injection:
 # delta_to_absolute conversion. Do not modify the clean checkpoint.
 ```
 
-Expected catch: element 9 or 10. Agent should trace
-`output_spec.post_processing.delta_to_absolute` and compare would-be payload
-semantics.
+Expected catch: `replay-reference-vector` — the golden output includes
+delta-to-absolute reconstruction; skipping it produces numerically different
+actions (raw deltas vs accumulated absolutes).
 
-Record as gap if: the agent checks only output shape/range and not semantics.
+Record as gap if: replay-reference-vector not run.
 
 #### T2.5: Absolute Dims Incorrectly Delta-Converted
 
@@ -422,10 +423,10 @@ Injection:
 # state addition to all action dimensions.
 ```
 
-Expected catch: element 9. Agent should compare `delta_mask` and
-`absolute_dims_reason` against post-processing.
+Expected catch: `replay-reference-vector` — applying delta conversion to
+absolute dims (e.g. rot6d) corrupts those dimensions in the output.
 
-Record as gap if: the protocol does not make the per-dim mask explicit.
+Record as gap if: replay-reference-vector not run.
 
 #### T2.6: Wrong Action Scaling
 
@@ -439,11 +440,10 @@ Injection:
 # the clip value to a mismatched constant.
 ```
 
-Expected catch: element 9. Validator may catch if round-trip results or stats
-fingerprints are compared; otherwise agent should catch by tracing
-post-processing.
+Expected catch: `replay-reference-vector` — wrong scaling/clip produces
+numerically different unnormalized actions.
 
-Record as gap if: no one inspects output unnormalization beyond shape.
+Record as gap if: replay-reference-vector not run.
 
 #### T2.7: Image Normalization Omitted
 
@@ -456,10 +456,11 @@ Injection:
 # normalization. Keep shape identical to avoid easy shape failure.
 ```
 
-Expected catch: element 6 or 7. Agent should compare the observed transform
-pipeline with `input_contract.images[].normalization`.
+Expected catch: `replay-reference-vector` — skipping normalization changes
+pixel values fed to the model, producing different actions.
 
-Record as gap if: final tensor shape is accepted without value-range summary.
+Record as gap if: replay-reference-vector not run or reference vector uses
+synthetic images that don't exercise the normalization path.
 
 #### T2.8: Color Order Swap RGB/BGR
 
@@ -471,12 +472,13 @@ Injection:
 # In replay source or runner transform, reverse the channel axis once.
 ```
 
-Expected catch: element 2, 6, or 7. Agent should inspect raw image convention
-and final tensor channel order; validator can only help if reference vectors
-or transform tests exist.
+Expected catch: `replay-reference-vector` — swapped channels produce different
+feature activations and different actions. Real reference frames (not synthetic
+torch.rand) make this detectable because natural images have channel-dependent
+statistics.
 
-Record as gap if: protocol has no evidence requirement for image channel
-order.
+Record as gap if: replay-reference-vector not run or reference vector uses
+synthetic images (uniform random has similar channel statistics under swap).
 
 #### T2.9: Reference Test Vector Mismatch
 
@@ -487,22 +489,24 @@ Injection:
 
 ```bash
 python - <<'PY'
-import json
+import numpy as np
 from pathlib import Path
-p = Path("$TRIAL_DIR/ckpt/MODEL_PASSPORT.json")
-data = json.loads(p.read_text())
-rtv = data.get("reference_test_vector")
-if not rtv:
-    raise SystemExit("no reference_test_vector present")
-rtv["expected_output"][0][0] = rtv["expected_output"][0][0] + 1.0
-p.write_text(json.dumps(data, indent=2) + "\n")
+p = Path("$TRIAL_DIR/ckpt/assets/reference_test_vector/expected_output.npy")
+if not p.is_file():
+    raise SystemExit("no expected_output.npy present")
+arr = np.load(p)
+arr[0, 0] += 1.0
+np.save(p, arr)
 PY
 ```
 
-Expected catch: element 4 if signoff catches passport tamper; otherwise
-element 5-7 if a golden vector validator runs.
+Expected catch: `validate-checkpoint --require-signoff` — the tampered .npy
+file has a different sha256 than what's recorded in `weight_integrity`, so the
+signoff hash check fails. If run without `--require-signoff`,
+`replay-reference-vector` catches it via hash mismatch before even running the
+model.
 
-Record as gap if: reference vectors exist but are never executed.
+Record as gap if: neither signoff nor replay hash checks are run.
 
 #### T2.10: Incorrect Runtime Dtype
 
