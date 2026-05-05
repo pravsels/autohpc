@@ -15,6 +15,7 @@ they become silently degraded outputs at inference time.
 from __future__ import annotations
 
 import importlib
+import re
 from typing import Any, Callable, Dict, List
 
 from ..extraction import CheckpointExtraction
@@ -436,8 +437,11 @@ def check_determinism_recorded(load: PassportLoadResult) -> Observation:
     )
 
 
+_HF_REVISION_RE = re.compile(r"^[0-9a-f]{7,40}$")
+
+
 def check_external_pretrained_assets_pinned(load: PassportLoadResult) -> Observation:
-    """Every external pretrained submodule has a non-null `hf_revision`."""
+    """Every external pretrained submodule has a valid `hf_revision` commit SHA."""
     if not load.has_passport:
         return _not_checked("external_pretrained_assets_pinned", "no passport loaded")
 
@@ -451,17 +455,30 @@ def check_external_pretrained_assets_pinned(load: PassportLoadResult) -> Observa
             category=CATEGORY,
         )
 
-    unpinned = [
-        {"submodule": a.submodule, "source": a.source}
-        for a in assets if not a.hf_revision
-    ]
-    if unpinned:
+    unpinned = []
+    bad_format = []
+    for a in assets:
+        if not a.hf_revision:
+            unpinned.append({"submodule": a.submodule, "source": a.source})
+        elif not _HF_REVISION_RE.match(a.hf_revision):
+            bad_format.append({
+                "submodule": a.submodule,
+                "hf_revision": a.hf_revision,
+                "problem": "not a commit SHA (expected 7-40 hex chars)",
+            })
+
+    problems = unpinned + bad_format
+    if problems:
         return Observation(
             check="external_pretrained_assets_pinned",
             status=Status.SOFT_SIGNAL,
-            message=f"{len(unpinned)} external pretrained submodule(s) without "
-                    "hf_revision pin (reproducibility risk)",
-            details={"unpinned": unpinned, "total": len(assets)},
+            message=f"{len(problems)} external pretrained submodule(s) with "
+                    "missing or invalid hf_revision (reproducibility risk)",
+            details={
+                "unpinned": unpinned or None,
+                "bad_format": bad_format or None,
+                "total": len(assets),
+            },
             category=CATEGORY,
         )
     return Observation(
