@@ -81,6 +81,7 @@ def run_passport_checks(
     ext: CheckpointExtraction,
     dataset_path: Optional[Path] = None,
     require_signoff: bool = False,
+    target_repo: Optional[Path] = None,
 ) -> List[Observation]:
     """Run every passport-driven check, dispatched by signature.
 
@@ -98,6 +99,7 @@ def run_passport_checks(
         "ext": ext,
         "dataset_path": dataset_path,
         "require_signoff": require_signoff,
+        "target_repo": target_repo,
     }
 
     results: List[Observation] = []

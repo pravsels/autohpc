@@ -12,6 +12,7 @@ Usage:
     validate-checkpoint /path/to/checkpoint --out report.json
     validate-checkpoint /path/to/checkpoint --norm-stats /extra/stats.json
     validate-checkpoint /path/to/checkpoint --dataset-path /local/dataset
+    validate-checkpoint /path/to/checkpoint --target-repo /path/to/deploy/repo
     validate-checkpoint /path/to/checkpoint --require-signoff
     validate-checkpoint /path/to/checkpoint --show-not-checked
     validate-checkpoint /path/to/checkpoint --skip-section signoff
@@ -55,6 +56,10 @@ def main() -> None:
         help="local LeRobot dataset directory; enables input_contract_vs_dataset",
     )
     parser.add_argument(
+        "--target-repo", type=Path, default=None,
+        help="deployment target repo; enables deployment_repo_commit check",
+    )
+    parser.add_argument(
         "--require-signoff", action="store_true",
         help="missing SIGNOFF.json becomes hard fail (use on prod deploys)",
     )
@@ -80,6 +85,7 @@ def main() -> None:
         result = self_validate_passport(
             args.checkpoint_dir,
             dataset_path=args.dataset_path,
+            target_repo=args.target_repo,
             require_signoff=args.require_signoff,
             extra_norm_stats=args.norm_stats or None,
             skip_sections=args.skip_section or None,

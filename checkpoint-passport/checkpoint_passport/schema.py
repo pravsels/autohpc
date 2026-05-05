@@ -125,6 +125,7 @@ class TrainingDatasetSpec:
     repo: Optional[str] = None                    # HuggingFace repo id
     commit: Optional[str] = None                  # pinned commit hash
     version: Optional[str] = None                 # e.g. "v2.1", "v3.0"
+    loader_class: Optional[str] = None            # e.g. "lerobot.datasets.LeRobotDataset"
     num_episodes: Optional[int] = None
     total_frames: Optional[int] = None
     episode_filter: Optional[str] = None          # expression if subset was used
@@ -440,6 +441,8 @@ class Provenance:
     merged_config_sha256: Optional[str] = None    # hash of the resolved training config
     parent_checkpoint: Optional[str] = None       # passport hash of parent if fine-tuned
     parent_description: Optional[str] = None      # e.g. "pretrained DiT base, 50K steps on ..."
+    deployment_repo: Optional[str] = None         # git remote URL of target deployment repo
+    deployment_repo_commit: Optional[str] = None  # expected commit; validator hard-fails on mismatch or dirty tree
 
 
 # ── transform_pipeline ──────────────────────────────────────────────────

@@ -39,6 +39,10 @@ The single biggest pain in passport generation is recovering things that should 
 
 - **Training-repo commit SHA** (`git rev-parse HEAD` in the model code repo at submit time). Without this you cannot reproduce the exact model class definitions.
 - **Dataset commit SHAs / HF revisions** for every dataset used (one per `--dataset` arg).
+- **Dataset loader class** for each dataset (e.g. `lerobot.datasets.LeRobotDataset`). The wrong loader silently misses video-encoded images or applies different key mappings.
+- **Model class identity** — `class_name` and `class_module` from the training stack. Without these the validator cannot confirm the correct model class loads.
+- **Pretrained backbone revisions** — `hf_revision` for every external pretrained submodule. Unpinned backbones drift silently across pip installs.
+- **Deployment-repo commit SHA** (`git rev-parse HEAD` in the target deployment repo). The validator hard-fails on mismatch or dirty tree when `--require-signoff` is active. Without this, code changes in the deployment adapter go undetected.
 - **Resolved config** — the merged hyperparameter config the trainer actually used, written as `config.json` in the checkpoint root (most frameworks already do this).
 - **Run-log pointer** — either a sanitised local `TRAINING_LOG.md` or the W&B / MLflow URL.
 
@@ -61,7 +65,8 @@ Pure file inspection. You can do this from any host (with the caveat in the tabl
 | `config.json` → tokenizer / language fields | `input_contract.language` |
 | `config.json` → top-level `n_obs_steps`, `control_rate_hz` | `input_contract.temporal` |
 | Norm stats file (often `assets/<stack>_stats.json`, sometimes embedded in `config.json`) — keys + per-dim mean/std/quantiles + per-dim `norm_mask` | `input_contract.state.normalization`, `.actions.normalization`; `actions.norm_mask` and `actions.delta_dims` (structured `DeltaSpec` with `delta_mask: List[bool]` and `absolute_dims_reason`) |
-| Training log / launcher metadata | `input_contract.training_datasets[]`, `provenance.*` |
+| Training log / launcher metadata | `input_contract.training_datasets[]` (include `loader_class`, e.g. `"lerobot.datasets.LeRobotDataset"`), `provenance.*` |
+| Deployment target repo | `provenance.deployment_repo`, `provenance.deployment_repo_commit` — the repo + commit of the code that will load this checkpoint at deploy time. Validator hard-fails on HEAD mismatch or dirty tree when `--target-repo` is passed. |
 | safetensors header (no weight load — `safe_open(..., framework='pt').keys()`) | `weight_integrity.weight_files[]` (path, sha256, size) |
 | Config + class import path of training stack | `model_identity.class_name`, `.class_module` (note: once these are filled, `model_identity_resolvable` will hard-fail on any host that can't import the class — full validation moves to Phase 2's container) |
 | Config + norm stats + dataset adapter code | `transform_pipeline[]` — ordered `TransformStep` list documenting the full data flow (sensor → action). Each step has `check_type: "static" \| "dynamic"` |
@@ -75,6 +80,8 @@ Pure file inspection. You can do this from any host (with the caveat in the tabl
 - `state.sub_keys` describes the **model-facing** layout — i.e. what the forward pass sees, after any rotation expansion. For the raw dataset layout, look at `config.json::dataset_schema` if present. The two often disagree (e.g. a 6D rotation source expanded to 9D rot6d); the validator's `state_dim_consistency` soft signal will report the divergence — that's expected, document it in the passport.
 - Norm-stats fingerprint: when stats are flat per-dim, populate `per_dim_q02` / `per_dim_q98`. When stats are per-timestep `(H, D)`, suffix the keys with `_at_t0` (the validator's helper takes row 0). The `_at_t0` convention is checked by the kernel.
 - `provenance.run_log_path` accepts either a relative `.md` path under the checkpoint repo OR an `http(s)://` URI to an external dashboard (W&B, MLflow). Pick whichever is the canonical pointer for this run.
+- `provenance.deployment_repo` + `provenance.deployment_repo_commit` pin the deployment target repo (e.g. the robotics stack that hosts the adapter). At preflight time, `validate-checkpoint --target-repo <path>` hard-fails if the repo's HEAD doesn't match or the working tree is dirty. This catches adapter swaps, local patches, and version drift without relying on agent reasoning.
+- `training_datasets[].loader_class` records the Python class used to load the dataset (e.g. `"lerobot.datasets.LeRobotDataset"`). Preflight agents must use this loader, not a generic `datasets.load_dataset()` — the wrong loader can silently miss video-encoded images or apply different key mappings.
 - `weight_integrity.weight_files[]` should list **every** file that ships with the checkpoint and is loaded at inference time, not just the safetensors. That includes `config.json`, norm stats, tokenizer files. The signer hashes everything in this list.
 - `actions.delta_dims` is now a structured `DeltaSpec` with `delta_mask: List[bool]` (per-dim: `True` = delta, `False` = absolute) and `absolute_dims_reason` (e.g. "6D rotation (rot6d) passed through unchanged"). This replaces the free-text format from v0.1.
 - `transform_pipeline` is a top-level ordered list of `TransformStep`. Populate one entry for each data transformation from raw sensor to model input and from model output to robot command. Example steps: resize, ImageNet normalize, rotation expansion, RAMEN normalize, delta computation, camera stacking, temporal stacking, text tokenization, RAMEN unnormalize, delta-to-absolute conversion.
@@ -213,6 +220,7 @@ Non-zero exit = do not ship.
 | Sign (refuses on hard fails) | `sign-checkpoint <ckpt> --reason '<why soft signals OK>'` |
 | Dry-run sign (print, don't write) | `sign-checkpoint <ckpt> --dry-run` |
 | Deployment gate | `validate-checkpoint <ckpt> --require-signoff` |
+| Deployment gate with target repo binding | `validate-checkpoint <ckpt> --require-signoff --target-repo <deploy_repo>` |
 
 ## After Signing
 

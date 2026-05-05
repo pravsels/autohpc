@@ -72,6 +72,7 @@ def self_validate_passport(
     checkpoint_dir: str | Path,
     *,
     dataset_path: Optional[str | Path] = None,
+    target_repo: Optional[str | Path] = None,
     require_signoff: bool = False,
     extra_norm_stats: Optional[List[Path]] = None,
     skip_sections: Optional[Iterable[str]] = None,
@@ -88,6 +89,11 @@ def self_validate_passport(
         `input_contract_vs_dataset` check; without it that check
         emits NOT_CHECKED unless the passport's training_datasets[0]
         resolves to a local HF cache snapshot.
+    target_repo
+        Optional path to the deployment target repo (e.g. alpha-robotics).
+        When provided, the validator checks that the repo's HEAD matches
+        ``provenance.deployment_repo_commit`` and the working tree is
+        clean.  Hard-fails on mismatch or dirty state.
     require_signoff
         When true, missing SIGNOFF.json becomes a hard FAIL instead of
         a SOFT_SIGNAL.  Use this on production deployment paths.
@@ -159,6 +165,7 @@ def self_validate_passport(
             load, extraction,
             dataset_path=Path(dataset_path) if dataset_path else None,
             require_signoff=require_signoff,
+            target_repo=Path(target_repo) if target_repo else None,
         )
     )
     observations.extend(run_static_checks(extraction))
