@@ -754,10 +754,10 @@ def check_camera_identity(load: PassportLoadResult) -> Observation:
     if populated == 0:
         return Observation(
             check="camera_identity",
-            status=Status.SOFT_SIGNAL,
+            status=Status.FAIL,
             message=(
                 f"no camera identity fields on any of {total} image spec(s); "
-                "camera swap detection unavailable"
+                "each camera needs at least one of: reference_frame_hash, camera_serial, camera_usb_path"
             ),
             details={"cameras_without_identity": missing_fields},
             category=CATEGORY,
@@ -766,7 +766,7 @@ def check_camera_identity(load: PassportLoadResult) -> Observation:
     if populated < total:
         return Observation(
             check="camera_identity",
-            status=Status.SOFT_SIGNAL,
+            status=Status.FAIL,
             message=f"{populated}/{total} image spec(s) have camera identity fields",
             details={"cameras_without_identity": missing_fields},
             category=CATEGORY,

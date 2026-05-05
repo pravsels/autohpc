@@ -588,7 +588,7 @@ def check_runtime_constraints(load: PassportLoadResult) -> Observation:
 
 
 def check_reference_test_vector_present(load: PassportLoadResult) -> Observation:
-    """Reference test vector is populated (enables reproducibility checks)."""
+    """Reference test vector assets are populated and hash fields are set."""
     if not load.has_passport:
         return _not_checked("reference_test_vector", "no passport loaded")
 
@@ -596,23 +596,31 @@ def check_reference_test_vector_present(load: PassportLoadResult) -> Observation
     if rtv is None:
         return Observation(
             check="reference_test_vector",
-            status=Status.SOFT_SIGNAL,
+            status=Status.FAIL,
             message="no reference_test_vector in passport; golden-input reproducibility check cannot run",
             details={},
             category=CATEGORY,
         )
 
     problems: List[str] = []
-    if not rtv.input_state:
-        problems.append("input_state is empty")
-    if not rtv.expected_output:
-        problems.append("expected_output is empty")
+    if not rtv.input_state_path:
+        problems.append("input_state_path is empty")
+    if not rtv.input_state_hash:
+        problems.append("input_state_hash is empty")
+    if not rtv.expected_output_path:
+        problems.append("expected_output_path is empty")
+    if not rtv.expected_output_hash:
+        problems.append("expected_output_hash is empty")
+    if not rtv.input_images_path:
+        problems.append("input_images_path is empty")
+    if not rtv.input_images_hash:
+        problems.append("input_images_hash is empty")
 
     if problems:
         return Observation(
             check="reference_test_vector",
-            status=Status.SOFT_SIGNAL,
-            message=f"reference_test_vector present but incomplete: {'; '.join(problems)}",
+            status=Status.FAIL,
+            message=f"reference_test_vector incomplete: {'; '.join(problems)}",
             details={"problems": problems},
             category=CATEGORY,
         )
@@ -622,8 +630,9 @@ def check_reference_test_vector_present(load: PassportLoadResult) -> Observation
         status=Status.PASS,
         message=(
             f"reference_test_vector present: "
-            f"{len(rtv.input_state)}-dim state, "
-            f"{len(rtv.expected_output)}x{len(rtv.expected_output[0]) if rtv.expected_output else '?'} output, "
+            f"state={rtv.input_state_path}, "
+            f"output={rtv.expected_output_path}, "
+            f"{len(rtv.input_images_hash)} image(s), "
             f"tolerance={rtv.tolerance}"
         ),
         details={},

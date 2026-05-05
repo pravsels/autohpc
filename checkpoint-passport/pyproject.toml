@@ -25,6 +25,7 @@ test = ["pytest>=7"]
 validate-checkpoint = "checkpoint_passport.cli.validate:main"
 sign-checkpoint = "checkpoint_passport.cli.sign:main"
 generate-passport = "checkpoint_passport.cli.generate:main"
+replay-reference-vector = "checkpoint_passport.cli.replay:main"
 
 [tool.setuptools.packages.find]
 include = ["checkpoint_passport*"]

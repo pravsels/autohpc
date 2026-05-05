@@ -467,13 +467,17 @@ class TransformStep:
 
 
 # Golden input/output pair for end-to-end pipeline verification.
+# Numerical blobs are stored as .npy files in assets/ and referenced by
+# path + sha256 hash.  This keeps the passport JSON lean and diffable.
 @dataclass
 class ReferenceTestVector:
-    input_state: List[float] = field(default_factory=list)
-    input_prompt: str = ""
+    input_state_path: Optional[str] = None               # relative to ckpt root, .npy
+    input_state_hash: Optional[str] = None               # sha256 of the .npy file
+    expected_output_path: Optional[str] = None            # relative to ckpt root, .npy
+    expected_output_hash: Optional[str] = None            # sha256 of the .npy file
+    input_images_path: Optional[str] = None               # dir containing reference PNGs
     input_images_hash: Dict[str, str] = field(default_factory=dict)  # {cam_key: sha256}
-    input_images_path: Optional[str] = None
-    expected_output: List[List[float]] = field(default_factory=list)  # (horizon, action_dim)
+    input_prompt: str = ""
     tolerance: float = 1e-4
     torch_seed: int = 0
     notes: Optional[str] = None

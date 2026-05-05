@@ -147,7 +147,7 @@ do not install dependencies into the system Python or guess at versions.
    ```
 4. **GPU access** (`docker run --gpus all ...`) — required. Forward pass on CPU is 10× slower for no benefit and the validator can't tell the difference.
 
-**Calibration batch** — build it from `config.json` shapes. No hardcoding. For images use `torch.rand` (uniform `[0,1]`, matching most models' expected pre-normalization input range); for state use `torch.randn`; for language use the trained `default_prompt`. Use a small batch (1 or 2) — the smoke tests don't need volume, just signal.
+**Calibration batch** (for smoke tests only) — build it from `config.json` shapes. No hardcoding. For images use `torch.rand` (uniform `[0,1]`, matching most models' expected pre-normalization input range); for state use `torch.randn`; for language use the trained `default_prompt`. Use a small batch (1 or 2) — the smoke tests don't need volume, just signal. Note: the synthetic calibration batch is **only** for `smoke_results`. The `reference_test_vector` must use real data — see below.
 
 **Inference call** — use the **public inference API** the deployment will use, not the lowest-level `forward()`. The two often differ in input preprocessing (image stacking across cameras, time-axis layout, attention mask construction). If you call `forward()` directly with your own preprocessing, you'll smoke-test a code path no real consumer ever runs. Read what the model's serving entry point (`select_action`, `predict`, `__call__`, etc.) does and reproduce its preprocessing in the calibration batch.
 
@@ -160,7 +160,22 @@ do not install dependencies into the system Python or guess at versions.
 - `model_internals.state_dict` — `expected_keys_count`, `found_keys_count`, plus `missing_keys` / `unexpected_keys` from `model.load_state_dict(..., strict=False)`.
 - `model_internals.numerical_health` — run forward twice with the same `torch.manual_seed(0)`, confirm no NaN/Inf, confirm `max_abs_diff == 0` between the two passes.
 - `output_spec.smoke_results` — five typed buckets (`determinism`, `nan_inf`, `liveness`, `distribution`, `range_check`). Each is its own sub-dataclass in the schema with explicit fields — read `SmokeResults` in `schema.py` before populating. Each bucket needs `status: "pass" | "fail"`. The acceptance range for `range_check` should be derived from the model's own clip values (`clip_sample_range`, normalization clip values) — don't hardcode.
-- `reference_test_vector` — golden input/output pair (state, prompt, image hashes, expected output, tolerance, torch seed). Run the model on this fixed input and record the output.
+- `reference_test_vector` — golden input/output pair using **real data** from the training dataset. Do NOT use synthetic `torch.rand` / `torch.randn` — use a real frame so the reference exercises the full preprocessing pipeline and enables camera identity checks. Steps:
+  1. Load episode 0, frame 0 from the training HF dataset (e.g. `LeRobotDataset(repo_id, split="train")[0]`).
+  2. Save raw camera images as PNGs to `<ckpt>/assets/reference_frames/{short_key}.png` (one per camera, e.g. `front.png`, `wrist.png`).
+  3. Save the observation state vector as `<ckpt>/assets/reference_test_vector/input_state.npy` (`numpy.save`).
+  4. Run the adapter's `predict()` on this observation with `torch.manual_seed(0)`.
+  5. Save the action output as `<ckpt>/assets/reference_test_vector/expected_output.npy`.
+  6. Compute sha256 of each saved file and populate the passport fields:
+     - `reference_test_vector.input_state_path` / `input_state_hash`
+     - `reference_test_vector.expected_output_path` / `expected_output_hash`
+     - `reference_test_vector.input_images_path` (the directory, e.g. `assets/reference_frames`)
+     - `reference_test_vector.input_images_hash` (`{cam_key: sha256_of_png}`)
+     - `reference_test_vector.input_prompt` (from the dataset's task string)
+     - `reference_test_vector.tolerance` (default `1e-4`)
+     - `reference_test_vector.torch_seed` (default `0`)
+  7. For each camera image spec, populate `ImageSpec.reference_frame_hash` (sha256 of the PNG) and `ImageSpec.reference_frame_path` (relative path from ckpt root). These are **mandatory** — the validator hard-fails without them.
+  8. After signing, run `replay-reference-vector` to confirm the golden vector reproduces (see Quick Reference).
 - `norm_round_trip_results` — for each normalization step in `transform_pipeline`, take a known input, normalize, unnormalize, verify recovery within tolerance. Records `max_abs_error`, `within_clip_bound`, `status`.
 
 Splice the dynamic JSON into the static draft (a small Python script merging the two dicts is fine). The passport is now complete.
@@ -176,7 +191,8 @@ Every checkable claim in the passport falls into one of two categories:
 - Config values match passport (action_dim, horizon, image shapes)
 - Norm stats file sha matches passport fingerprint
 - No NaN/Inf in weights
-- Reference test vector reproduces expected output within tolerance
+- Reference test vector assets are present and hash fields are populated (`validate-checkpoint`)
+- Reference test vector reproduces expected output within tolerance (`replay-reference-vector` — separate CLI, needs model env)
 - Device paths / camera serials match expected mapping
 - `observation_delta_indices` matches config
 - Transform pipeline steps match code behavior
@@ -247,6 +263,7 @@ Non-zero exit = do not ship.
 | Dry-run sign (print, don't write) | `sign-checkpoint <ckpt> --dry-run` |
 | Deployment gate | `validate-checkpoint <ckpt> --require-signoff` |
 | Deployment gate with target repo binding | `validate-checkpoint <ckpt> --require-signoff --target-repo <deploy_repo>` |
+| Replay reference vector (dynamic, needs model env) | `replay-reference-vector <ckpt> --adapter-module <mod> --adapter-class <cls>` |
 
 ## After Signing
 
@@ -268,6 +285,7 @@ Once the checkpoint has a passing signoff, the passport's job is done. The next 
 - **Leaving `hf_revision: null` for a pretrained backbone** — one `HfApi.model_info(repo).sha` call away from a pinned revision; without it, `pip install` updates can silently swap the backbone.
 - **Treating soft signals as "good enough, ship it"** — sign with `--reason` and explain *each* soft signal. The reason string is the only audit trail for an acceptance decision.
 - **Editing the passport after signing without re-signing** — the passport sha in the signoff no longer matches; the next `validate-checkpoint --require-signoff` hard-fails. Always re-run `sign-checkpoint` after any passport edit.
+- **Skipping `replay-reference-vector` after signing** — the static validator only checks that the reference test vector section is *present*. You must run `replay-reference-vector` to actually exercise the pipeline end-to-end. This is the only check that catches runtime semantic faults (wrong scaling, missing normalization, color order swap, temporal stack corruption).
 - **Generating a passport without the training-repo commit SHA** — you'll guess wrong and produce a passport that documents the wrong code. Stop and ask the user instead.
 - **Leaving `transform_pipeline` empty** — the pipeline is the chain-of-custody. Without it, the passport can't be audited end-to-end.
 - **Leaving `runtime_constraints` empty when there are known version sensitivities** — `library_versions` is historical; if a specific version is *required* for correctness (e.g. transformers API drift), it must be in `runtime_constraints.required_versions`.
