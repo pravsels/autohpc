@@ -50,30 +50,47 @@ If any of the above is missing on a checkpoint you've been asked to passport, **
 
 ## Phase 1 — Static extraction (no torch, no GPU, no container)
 
-Pure file inspection. You can do this from any host (with the caveat in the table's last row: once `model_identity.class_module` is filled, full validation needs Phase 2's container). Populate every field in the schema you can, leave dynamic-only ones as `null` for now. Iterate against `validate-checkpoint <ckpt> --show-not-checked` as you go — `--show-not-checked` reveals which checks couldn't run because their inputs were missing from the passport, which is the closest thing the validator has to a "what fields am I still missing?" view. Note that the validator reports check results, not a field-by-field schema completion linter; for the latter, `schema.py` itself is the canonical list.
+Run `generate-passport` to deterministically extract every field that can be read from files on disk. Do **not** write `MODEL_PASSPORT.json` by hand — the tool reads `config.json`, norm stats, weight files, and git state, then emits the passport using the canonical `schema.py` dataclasses. Hand-authored passports have historically recorded wrong values (e.g. writing a dirty-tree class name as the canonical `class_name`).
 
-**What to read, and what schema field it feeds:**
+```bash
+cd <autohpc>/checkpoint-passport
 
-| Source | Schema target |
+# Minimal (checkpoint only):
+uv run generate-passport <ckpt_dir>
+
+# Full (with deployment + training repo binding and dataset info):
+uv run generate-passport <ckpt_dir> \
+  --target-repo <deployment_repo_path> \
+  --training-repo <training_code_repo_path> \
+  --dataset-repo <hf_dataset_id> \
+  --loader-class <dataset_loader_class>
+```
+
+The tool will:
+- Refuse to run if `--target-repo` is dirty (uncommitted changes)
+- Extract `deployment_repo_commit` and `training_repo_commit` via `git rev-parse HEAD`
+- Parse `config.json` for input/output contract, inference parameters, temporal spec, language spec
+- Hash every inference-critical file for `weight_integrity`
+- Extract norm stats fingerprints (q02/q98 at t0) and `norm_mask`
+- Derive `delta_dims` from `rot6d_slice`
+- Record pretrained provenance from `observation_encoder` config
+
+After running, review the output and iterate with `validate-checkpoint <ckpt> --show-not-checked` to see which checks still need data. Fields the tool leaves null (needs Phase 2 or judgment) are printed in the summary.
+
+**What the tool extracts vs. what you fill in manually:**
+
+| Auto-extracted by `generate-passport` | Left null (Phase 2 / judgment) |
 |---|---|
-| `config.json` → `input_features.observation.images.*` | `input_contract.images[]` (one entry per camera; `raw_shape`, `dtype`, `value_range`, `color_order`, `channel_layout`) |
-| `config.json` → `observation_encoder.resize_shape` + backbone identifier | `input_contract.images[].encoder_resize`; backbone repo + revision into `model_internals.pretrained_provenance[]` |
-| `config.json` → `input_features.observation.state.shape` | `input_contract.state.total_dim` |
-| `config.json` → `dataset_schema` (and `rot6d_slice` if present) | `input_contract.state.sub_keys` (per-sub-key model-facing breakdown — see convention below); rot6d expansion documented here too |
-| `config.json` → `output_features.action.shape` + top-level `horizon` | `input_contract.actions.total_dim`, `.horizon` |
-| `config.json` → `objective` block (scheduler, num_steps, `clip_sample`, `clip_sample_range`) and any `*_clip_value` post-processing fields | `output_spec.inference_parameters` (sampling config); also drives the smoke `range_check` acceptance bounds in Phase 2 |
-| `config.json` → tokenizer / language fields | `input_contract.language` |
-| `config.json` → top-level `n_obs_steps`, `control_rate_hz` | `input_contract.temporal` |
-| Norm stats file (often `assets/<stack>_stats.json`, sometimes embedded in `config.json`) — keys + per-dim mean/std/quantiles + per-dim `norm_mask` | `input_contract.state.normalization`, `.actions.normalization`; `actions.norm_mask` and `actions.delta_dims` (structured `DeltaSpec` with `delta_mask: List[bool]` and `absolute_dims_reason`) |
-| Training log / launcher metadata | `input_contract.training_datasets[]` (include `loader_class`, e.g. `"lerobot.datasets.LeRobotDataset"`), `provenance.*` |
-| Deployment target repo | `provenance.deployment_repo`, `provenance.deployment_repo_commit` — the repo + commit of the code that will load this checkpoint at deploy time. Validator hard-fails on HEAD mismatch or dirty tree when `--target-repo` is passed. |
-| safetensors header (no weight load — `safe_open(..., framework='pt').keys()`) | `weight_integrity.weight_files[]` (path, sha256, size) |
-| Config + class import path of training stack | `model_identity.class_name`, `.class_module` (note: once these are filled, `model_identity_resolvable` will hard-fail on any host that can't import the class — full validation moves to Phase 2's container) |
-| Config + norm stats + dataset adapter code | `transform_pipeline[]` — ordered `TransformStep` list documenting the full data flow (sensor → action). Each step has `check_type: "static" \| "dynamic"` |
-| Config + known bugs / environment issues | `known_issues[]` — `KnownIssue` entries with `id`, `severity`, `workaround`, `check_type` |
-| Config → library versions + known breakage | `model_identity.runtime_constraints` — `required_versions`, `required_python`, `known_incompatible` |
-| Camera metadata (serial numbers, USB paths, reference frames) | `input_contract.images[].camera_serial`, `.camera_usb_path`, `.reference_frame_hash`, `.reference_frame_path` |
-| Checkpoint lineage (if fine-tuned) | `provenance.parent_checkpoint`, `.parent_description` |
+| `input_contract.images[]` (shape, resize, color, dtype, normalization) | `images[].physical_mounting`, `camera_serial`, `camera_usb_path` |
+| `input_contract.state` (dim, sub_keys, normalization + fingerprint) | `model_identity.class_name`, `class_module`, `library_versions` |
+| `input_contract.actions` (dim, horizon, sub_keys, norm_mask, delta_dims) | `model_internals` (parameters, state_dict, numerical_health) |
+| `input_contract.language` (tokenizer, max_sequence_length) | `output_spec.smoke_results` |
+| `input_contract.temporal` (n_obs_steps, delta_indices) | `reference_test_vector` |
+| `output_spec.inference_parameters` (diffusion/regression config) | `norm_round_trip_results` |
+| `weight_integrity.weight_files[]` (path, sha256, size) | `transform_pipeline[]` (partially derivable, needs code reading) |
+| `provenance.*` (repos, commits, config hash, run log) | `known_issues[]` |
+| `model_internals.pretrained_provenance[]` (from config) | `pretrained_provenance[].hf_revision` (needs HF API or model load) |
+| `model_internals.forward_graph` (input/output keys + shapes) | `model_identity.runtime_constraints` (needs version knowledge) |
 
 **Conventions worth knowing now (full reasoning lives in the schema docstrings):**
 
@@ -93,6 +110,14 @@ Pure file inspection. You can do this from any host (with the caveat in the tabl
 ## Phase 2 — Dynamic extraction (in the model's own container)
 
 Load the model, walk it, run one forward pass on a synthetic calibration batch. This is the only phase that needs torch / GPU / the model package.
+
+**Before you start:** if `provenance.deployment_repo` is set, verify the deployment repo is clean. A dirty working tree means you'd be extracting dynamic information from modified code — the passport would not reflect what was actually signed off.
+
+```bash
+git -C <deployment_repo> status --porcelain
+```
+
+If there is any output, **stop and ask the user**. Do not proceed with dynamic extraction against a dirty deployment repo.
 
 **Finding the right environment.** You need the model's own runtime — not the
 system Python. Discover what's available before proceeding:
@@ -213,6 +238,7 @@ Non-zero exit = do not ship.
 | Step | Command |
 |---|---|
 | Install once per env | `uv pip install -e <autohpc>/checkpoint-passport` |
+| Generate passport (Phase 1 static) | `uv run generate-passport <ckpt> --target-repo <deploy_repo> --training-repo <train_repo> --dataset-repo <hf_id> --loader-class <class>` |
 | Validation (host — most checks; `model_identity_resolvable` may fail if class isn't importable) | `validate-checkpoint <ckpt>` |
 | Full validation (in model container) | `docker run --gpus all -v <repo>:/repo:ro -e PYTHONPATH=/repo/src <image> validate-checkpoint <ckpt>` |
 | Show NOT_CHECKED rows (closest thing to a "what's missing in my passport" view) | `validate-checkpoint <ckpt> --show-not-checked` |
