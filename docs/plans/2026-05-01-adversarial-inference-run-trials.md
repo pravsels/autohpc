@@ -32,11 +32,15 @@ setup plan first.
 
 ## Status (handoff for next agent session)
 
-- **Phase 3 (adversarial trials):** `in progress` (last completed: `T1.3`).
-  Trial root: `/tmp/adv_trials/20260501T125545Z`. Completed T1.1-T1.3 with
-  Hermes via Slack using the smarter model; all three were `caught_static` at
-  chain element 4. Trial log:
-  `/tmp/adv_trials/20260501T125545Z/TRIAL_LOG.md`.
+- **Phase 3 (adversarial trials):** `in progress` (last completed: `T2.2`).
+  Trial root (heavy checkpoint copies, volatile):
+  `/tmp/adv_trials/20260504T120633Z`. Trial results (durable, git-tracked):
+  `docs/reports/adversarial-trials/`. Completed T1.1-T1.6 (all `caught_static`
+  via signoff hash checks), T2.1 (`caught_static` via deployment_repo_commit
+  dirty check), T2.2 (`caught_static` via signoff hash + hf_revision format).
+  Next up: T2.3-T2.8 (runtime semantic faults, caught by `replay-reference-vector`).
+  **Prerequisite:** re-populate reference_test_vector with real data and
+  new .npy format before running T2.3+. See TRIAL_LOG.md "How to Continue".
 - **Phase 4 (synthesis):** `not started`. Writes the final verdict and
   ranked follow-up backlogs.
 
@@ -44,10 +48,64 @@ Update this section after each meaningful checkpoint. For Phase 3, append the
 last completed trial id (e.g. `Phase 3 (adversarial trials): in progress (last
 completed: T2.4)`) so a resuming agent knows exactly where to pick up.
 
+### Trial execution setup
+
+The executor (this agent) prepares each trial in `/tmp/adv_trials/` by copying
+the clean signed checkpoint and injecting one fault. A separate fresh agent
+(Hermes) receives a short prompt pointing at the trial checkpoint and runs the
+deployment protocol from scratch without knowing the injected fault. The
+executor records the outcome.
+
+**Trial results live in the repo** at `docs/reports/adversarial-trials/`:
+
+- `TRIAL_LOG.md` — summary ledger with one row per trial.
+- `trials/<trial_id>.md` — per-trial log with injection details, Hermes's
+  full response, outcome, and any bonus findings.
+
+This split exists so that `/tmp` handles the heavy checkpoint copies (which are
+volatile and don't need to survive) while the trial outcomes and Hermes
+transcripts are preserved for future agents running synthesis (Phase 4) or
+resuming mid-run. A resuming agent should read `TRIAL_LOG.md` first to see
+where to pick up, then read individual trial logs for detail.
+
+**Environment:** use the `alpha-robotics` mamba env
+(`/home/user/micromamba/envs/alpha-robotics/bin`). This provides
+`validate-checkpoint`, `sign-checkpoint`, and the `multitask_dit_policy`
+model package.
+
 The reference material (chain elements, schema-driven coverage matrix,
 deployment-protocol augmentation prose, validator coverage-output spec,
 backlog priorities) lives in the setup plan and is not duplicated here. Read
 the setup plan once for context, then return here for trial execution.
+
+---
+
+## Infrastructure Requirements by Trial
+
+| Bucket | Count | Trials |
+|--------|------:|--------|
+| Laptop only (files + validator) | 8 | T1.1-T1.6, T2.2, T2.9 |
+| Laptop + runner + replay data | 17 | T2.1, T2.3-T2.8, T2.10, T3.3-T3.5, T4.1-T4.4, T4.6, T4.7, T4.9 |
+| Needs / benefits from hardware | 5 | T3.1, T3.2, T4.5, T4.8, T4.9 |
+
+**Laptop only:** These trials tamper with checkpoint files (JSON edits, byte
+corruption, file deletion) and test whether the validator or a fresh agent
+reading the artifacts catches the fault. No runner, no cameras, no hardware.
+
+**Laptop + runner + replay:** These need the target repo's inference path
+running locally with recorded replay episodes. No physical cameras or robot,
+but the codebase, a Python environment with the model stack, and replay data
+must be available.
+
+**Needs / benefits from hardware:** T3.1 (swapped cameras) and T3.2 (serial
+mismatch) are most meaningful with real camera devices. T4.5 (no safe dry-run
+path) and T4.8 (wrong control rate) test emission behavior that is hollow
+without a real or simulated control loop. T4.9 (dirty target repo) is stronger
+with a real rig but doable in replay. All five can be attempted in replay mode
+with weaker evidence.
+
+The plan defaults to replay preflight, so the 17 runner + replay trials are the
+designed laptop path.
 
 ---
 
@@ -784,6 +842,12 @@ Schema/passport generation:
 | Priority | Missing contract | Trial evidence | Proposed field or generation rule |
 |---|---|---|---|
 ```
+
+**Early findings (from in-progress trials):**
+
+| Priority | Missing contract | Trial evidence | Proposed field or generation rule |
+|---|---|---|---|
+| P1 | No dataset loader class recorded | T2.1 runs 2-4: agents used `datasets.load_dataset()` which misses video-encoded images; correct loader is `lerobot.datasets.LeRobotDataset` | Add `training_datasets[].loader_class` (e.g. `"lerobot.datasets.LeRobotDataset"`) so preflight agents know which library to use |
 
 Procedure updates:
 
