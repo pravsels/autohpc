@@ -437,11 +437,11 @@ def check_determinism_recorded(load: PassportLoadResult) -> Observation:
     )
 
 
-_HF_REVISION_RE = re.compile(r"^[0-9a-f]{7,40}$")
+_REVISION_SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 
 
 def check_external_pretrained_assets_pinned(load: PassportLoadResult) -> Observation:
-    """Every external pretrained submodule has a valid `hf_revision` commit SHA."""
+    """Every external pretrained submodule has a valid source_revision or source_identifier pin."""
     if not load.has_passport:
         return _not_checked("external_pretrained_assets_pinned", "no passport loaded")
 
@@ -458,12 +458,14 @@ def check_external_pretrained_assets_pinned(load: PassportLoadResult) -> Observa
     unpinned = []
     bad_format = []
     for a in assets:
-        if not a.hf_revision:
+        if not a.source_revision:
+            if a.source_identifier:
+                continue
             unpinned.append({"submodule": a.submodule, "source": a.source})
-        elif not _HF_REVISION_RE.match(a.hf_revision):
+        elif not _REVISION_SHA_RE.match(a.source_revision):
             bad_format.append({
                 "submodule": a.submodule,
-                "hf_revision": a.hf_revision,
+                "source_revision": a.source_revision,
                 "problem": "not a commit SHA (expected 7-40 hex chars)",
             })
 
@@ -471,9 +473,9 @@ def check_external_pretrained_assets_pinned(load: PassportLoadResult) -> Observa
     if problems:
         return Observation(
             check="external_pretrained_assets_pinned",
-            status=Status.SOFT_SIGNAL,
+            status=Status.FAIL,
             message=f"{len(problems)} external pretrained submodule(s) with "
-                    "missing or invalid hf_revision (reproducibility risk)",
+                    "missing or invalid version pin",
             details={
                 "unpinned": unpinned or None,
                 "bad_format": bad_format or None,
@@ -486,7 +488,8 @@ def check_external_pretrained_assets_pinned(load: PassportLoadResult) -> Observa
         status=Status.PASS,
         message=f"all {len(assets)} external pretrained submodule(s) pinned",
         details={
-            "assets": [{"submodule": a.submodule, "hf_revision": a.hf_revision}
+            "assets": [{"submodule": a.submodule,
+                        "pin": a.source_revision or a.source_identifier}
                        for a in assets],
         },
         category=CATEGORY,

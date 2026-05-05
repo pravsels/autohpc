@@ -191,6 +191,18 @@ def check_deployment_repo_commit(
         )
 
     if target_repo is None:
+        if require_signoff and expected:
+            return Observation(
+                check="deployment_repo_commit",
+                status=Status.FAIL,
+                message="passport declares deployment_repo_commit but no "
+                        "--target-repo was provided; pass --target-repo to verify",
+                details={
+                    "deployment_repo_commit": expected,
+                    "deployment_repo": pv.deployment_repo,
+                },
+                category=CATEGORY,
+            )
         return _not_checked(
             "deployment_repo_commit",
             "no --target-repo provided; cannot verify deployment_repo_commit",

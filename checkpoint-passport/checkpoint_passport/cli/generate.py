@@ -233,17 +233,8 @@ def _extract_state(
             "source": str(stats_path.relative_to(ckpt)) if stats_path else None,
             "stats_dim": total_dim,
         }
-        # Add fingerprint
         if stats_path:
-            fingerprint: Dict[str, Any] = {"file_sha256": _sha256(stats_path)}
-            state_stats = stats.get("state", {})
-            q02 = state_stats.get("q02")
-            q98 = state_stats.get("q98")
-            if q02:
-                fingerprint["per_dim_q02_at_t0"] = q02[0] if isinstance(q02[0], list) else q02
-            if q98:
-                fingerprint["per_dim_q98_at_t0"] = q98[0] if isinstance(q98[0], list) else q98
-            norm_info["stats_fingerprint"] = fingerprint
+            norm_info["stats_fingerprint"] = {"file_sha256": _sha256(stats_path)}
 
     return StateSpec(
         total_dim=total_dim,
@@ -318,13 +309,7 @@ def _extract_actions(
         if layout:
             norm_info["stats_layout"] = layout
         if stats_path:
-            fingerprint: Dict[str, Any] = {"file_sha256": _sha256(stats_path)}
-            if q02:
-                fingerprint["per_dim_q02_at_t0"] = q02[0] if isinstance(q02[0], list) else q02
-            q98 = action_stats.get("q98")
-            if q98:
-                fingerprint["per_dim_q98_at_t0"] = q98[0] if isinstance(q98[0], list) else q98
-            norm_info["stats_fingerprint"] = fingerprint
+            norm_info["stats_fingerprint"] = {"file_sha256": _sha256(stats_path)}
 
     return ActionSpec(
         total_dim=total_dim,
@@ -396,21 +381,36 @@ def _extract_pretrained(config: Dict[str, Any]) -> List[PretrainedAsset]:
     vision = obs_encoder.get("vision", {})
     if vision:
         backbone = vision.get("backbone")
+        hf_repo = f"timm/{backbone}" if backbone else None
         assets.append(PretrainedAsset(
             submodule="observation_encoder.vision",
             source="timm" if backbone else None,
-            timm_string=backbone,
+            source_identifier=backbone,
+            source_revision=_resolve_hf_revision(hf_repo) if hf_repo else None,
             frozen_in_training=False,
             lr_multiplier=vision.get("lr_multiplier"),
         ))
     text = obs_encoder.get("text", {})
     if text and text.get("model"):
+        model_id = text.get("model")
+        revision = _resolve_hf_revision(model_id)
         assets.append(PretrainedAsset(
             submodule="observation_encoder.text",
             source="huggingface",
-            hf_revision=None,
+            source_identifier=model_id,
+            source_revision=revision,
         ))
     return assets
+
+
+def _resolve_hf_revision(repo_id: str) -> Optional[str]:
+    """Best-effort resolve of a HuggingFace model repo's current commit SHA."""
+    try:
+        from huggingface_hub import HfApi
+        info = HfApi().model_info(repo_id)
+        return info.sha
+    except Exception:
+        return None
 
 
 def _extract_training_datasets(
@@ -444,12 +444,24 @@ def _extract_training_datasets(
     for i, repo in enumerate(repos):
         if not repo:
             continue
+        commit = _resolve_hf_dataset_revision(repo)
         results.append(TrainingDatasetSpec(
             repo=repo,
+            commit=commit,
             loader_class=loaders[i] if i < len(loaders) else None,
             contributes_to_norm_stats=True,
         ))
     return results
+
+
+def _resolve_hf_dataset_revision(repo_id: str) -> Optional[str]:
+    """Best-effort resolve of a HuggingFace dataset's current commit SHA."""
+    try:
+        from huggingface_hub import HfApi
+        info = HfApi().dataset_info(repo_id)
+        return info.sha
+    except Exception:
+        return None
 
 
 def generate_passport(

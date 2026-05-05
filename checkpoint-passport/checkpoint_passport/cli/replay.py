@@ -1,10 +1,11 @@
 """
 CLI entry point: replay the reference test vector through an adapter.
 
-Loads the golden input (images, state, prompt) from the checkpoint's
-assets/ directory, runs the adapter's predict() method, and compares
-the output against the stored expected_output.npy.  All asset hashes
-are verified against the passport before running.
+Loads N stored frames (images, state) from the checkpoint's assets/
+directory, constructs the temporal input tensor from the last n_obs_steps
+frames, runs a single model forward pass, and compares the output against
+the stored expected_output.npy.  All asset hashes are verified against
+the passport before running.
 
 This is a dynamic check — it requires torch, the model package, and
 GPU access.  Run it in the model's own environment, not the
@@ -28,7 +29,7 @@ import importlib
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 PASSPORT_FILENAME = "MODEL_PASSPORT.json"
 
@@ -110,37 +111,57 @@ def replay(
         print("FAIL: no reference_test_vector in passport", file=sys.stderr)
         return False
 
+    n_frames = rtv.get("n_frames", 10)
     input_state_path = rtv.get("input_state_path")
     input_state_hash = rtv.get("input_state_hash")
     expected_output_path = rtv.get("expected_output_path")
     expected_output_hash = rtv.get("expected_output_hash")
     input_images_path = rtv.get("input_images_path")
-    input_images_hash: Dict[str, str] = rtv.get("input_images_hash", {})
+    input_images_hash: Dict[str, List[str]] = rtv.get("input_images_hash") or {}
     input_prompt = rtv.get("input_prompt", "")
     torch_seed = rtv.get("torch_seed", 0)
     tol = tolerance if tolerance is not None else rtv.get("tolerance", 1e-4)
 
-    for field in ("input_state_path", "input_state_hash",
-                  "expected_output_path", "expected_output_hash",
-                  "input_images_path"):
-        if not rtv.get(field):
-            print(f"FAIL: reference_test_vector.{field} is missing", file=sys.stderr)
+    # Read n_obs_steps from passport temporal spec
+    temporal = (passport.get("input_contract") or {}).get("temporal") or {}
+    n_obs_steps = temporal.get("n_obs_steps")
+    if not n_obs_steps:
+        print("FAIL: input_contract.temporal.n_obs_steps is missing", file=sys.stderr)
+        return False
+    if n_obs_steps > n_frames:
+        print(
+            f"FAIL: n_obs_steps ({n_obs_steps}) > n_frames ({n_frames})",
+            file=sys.stderr,
+        )
+        return False
+
+    for field_name in ("input_state_path", "input_state_hash",
+                       "expected_output_path", "expected_output_hash",
+                       "input_images_path"):
+        if not rtv.get(field_name):
+            print(f"FAIL: reference_test_vector.{field_name} is missing", file=sys.stderr)
             return False
     if not input_images_hash:
         print("FAIL: reference_test_vector.input_images_hash is empty", file=sys.stderr)
         return False
 
-    # -- verify and load input_state.npy --
+    # -- verify and load input_states.npy (n_frames, state_dim) --
     state_file = checkpoint_dir / input_state_path
     if not state_file.is_file():
         print(f"FAIL: {input_state_path} not found", file=sys.stderr)
         return False
     if not _verify_hash(state_file, input_state_hash, "input_state"):
         return False
-    input_state = np.load(state_file, allow_pickle=False)
-    print(f"  input_state: {input_state.shape} {input_state.dtype}")
+    all_states = np.load(state_file, allow_pickle=False)
+    print(f"  input_states: {all_states.shape} {all_states.dtype}")
+    if all_states.shape[0] != n_frames:
+        print(
+            f"FAIL: input_states first dim ({all_states.shape[0]}) != n_frames ({n_frames})",
+            file=sys.stderr,
+        )
+        return False
 
-    # -- verify and load expected_output.npy --
+    # -- verify and load expected_output.npy (horizon, action_dim) --
     output_file = checkpoint_dir / expected_output_path
     if not output_file.is_file():
         print(f"FAIL: {expected_output_path} not found", file=sys.stderr)
@@ -156,49 +177,70 @@ def replay(
         print(f"FAIL: {input_images_path} not found or not a directory", file=sys.stderr)
         return False
 
-    image_tensors: Dict[str, torch.Tensor] = {}
-    for cam_key, expected_hash in input_images_hash.items():
-        # cam_key is like "images.front" — the PNG filename uses the last part
-        short_key = cam_key.split(".")[-1] if "." in cam_key else cam_key
-        png_path = images_dir / f"{short_key}.png"
-        if not png_path.is_file():
-            print(f"FAIL: reference frame {png_path} not found", file=sys.stderr)
-            return False
-        if not _verify_hash(png_path, expected_hash, f"image:{cam_key}"):
-            return False
+    from PIL import Image
 
-        from PIL import Image
-        img = Image.open(png_path).convert("RGB")
-        img_np = np.array(img, dtype=np.float32) / 255.0  # HWC [0,1]
-        img_tensor = torch.from_numpy(img_np).permute(2, 0, 1)  # CHW
-        # Strip the "images." or "observation.images." prefix for the adapter
+    # Load all N frames per camera, verify hashes
+    # input_images_hash: {cam_key: [hash_frame_0, hash_frame_1, ...]}
+    all_images: Dict[str, List[Any]] = {}  # cam_key -> list of CHW tensors
+    for cam_key, frame_hashes in input_images_hash.items():
+        if len(frame_hashes) != n_frames:
+            print(
+                f"FAIL: {cam_key} has {len(frame_hashes)} hashes, expected {n_frames}",
+                file=sys.stderr,
+            )
+            return False
+        short_key = cam_key.split(".")[-1] if "." in cam_key else cam_key
+        all_images[cam_key] = []
+        for frame_idx, expected_hash in enumerate(frame_hashes):
+            png_path = images_dir / f"{short_key}_{frame_idx:03d}.png"
+            if not png_path.is_file():
+                print(f"FAIL: reference frame {png_path} not found", file=sys.stderr)
+                return False
+            if not _verify_hash(png_path, expected_hash, f"image:{cam_key}[{frame_idx}]"):
+                return False
+            img = Image.open(png_path).convert("RGB")
+            img_np = np.array(img, dtype=np.float32) / 255.0  # HWC [0,1]
+            img_tensor = torch.from_numpy(img_np).permute(2, 0, 1)  # CHW
+            all_images[cam_key].append(img_tensor)
+        print(f"  {cam_key}: {n_frames} frames, each {all_images[cam_key][0].shape}")
+
+    # -- select last n_obs_steps frames for temporal input --
+    print(f"\n  n_frames={n_frames}, n_obs_steps={n_obs_steps}")
+    print(f"  using frames [{n_frames - n_obs_steps}:{n_frames}] for temporal input")
+
+    states_window = all_states[-n_obs_steps:]  # (n_obs_steps, state_dim)
+    state_tensor = torch.from_numpy(states_window.astype(np.float32))
+
+    image_tensors: Dict[str, torch.Tensor] = {}
+    for cam_key, frame_list in all_images.items():
+        frames_window = frame_list[-n_obs_steps:]  # last n_obs_steps frames
+        stacked = torch.stack(frames_window, dim=0)  # (n_obs_steps, C, H, W)
         adapter_key = cam_key
         if adapter_key.startswith("observation."):
             adapter_key = adapter_key[len("observation."):]
         if adapter_key.startswith("images."):
             adapter_key = "image_" + adapter_key[len("images."):]
-        image_tensors[adapter_key] = img_tensor
-        print(f"  {cam_key}: {img_tensor.shape}")
+        image_tensors[adapter_key] = stacked
 
     # -- load adapter --
     print(f"\nLoading adapter: {adapter_module}.{adapter_class}")
     adapter = _load_adapter(adapter_module, adapter_class, checkpoint_dir, device)
 
-    # -- build observation and run forward pass --
-    # Dynamically import PolicyObservation from the same package as the adapter.
-    # Falls back to a simple namespace if the adapter's package doesn't provide one.
+    # -- build observation and run single forward pass --
     adapter_pkg = adapter_module.rsplit(".", 1)[0] if "." in adapter_module else adapter_module
-    state_tensor = torch.from_numpy(input_state.astype(np.float32))
     try:
         policy_mod = importlib.import_module(f"{adapter_pkg}.policy")
         ObsCls = getattr(policy_mod, "PolicyObservation")
+    except ImportError:
+        ObsCls = None
+
+    if ObsCls is not None:
         obs = ObsCls(
             images=image_tensors,
             state=state_tensor,
             language_instruction=input_prompt if input_prompt else None,
         )
-    except (ImportError, AttributeError):
-        # Fallback: construct a simple namespace the adapter can consume
+    else:
         class _Obs:
             pass
         obs = _Obs()
@@ -210,7 +252,7 @@ def replay(
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(torch_seed)
 
-    print(f"Running forward pass (seed={torch_seed})...")
+    print(f"Running single forward pass (seed={torch_seed})...")
     with torch.no_grad():
         result = adapter.predict(obs)
 
@@ -242,7 +284,6 @@ def replay(
         print(f"\nPASS: output matches expected within tolerance {tol}")
         return True
 
-    # Print worst offenders
     flat_diff = abs_diff.flatten()
     worst_indices = np.argsort(flat_diff)[-5:][::-1]
     print(f"\nFAIL: output differs beyond tolerance {tol}")

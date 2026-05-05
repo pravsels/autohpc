@@ -217,13 +217,13 @@ class StateDictBlock:
 
 # An external pretrained component embedded in the model (e.g. a vision
 # encoder from timm or a language backbone from HuggingFace).
-# hf_revision pins the exact version; the kernel check flags unpinned assets.
+# source_revision pins the exact version; the kernel check flags unpinned assets.
 @dataclass
 class PretrainedAsset:
     submodule: str                                # dotted path within the model
     source: Optional[str] = None                  # "timm" | "huggingface" | ...
-    timm_string: Optional[str] = None             # timm model identifier if applicable
-    hf_revision: Optional[str] = None             # pinned commit/tag
+    source_identifier: Optional[str] = None       # source-specific model name (e.g. timm string, HF repo id)
+    source_revision: Optional[str] = None         # pinned version (commit SHA for HF, null when source_identifier is sufficient)
     frozen_in_training: Optional[bool] = None
     lr_multiplier: Optional[float] = None
 
@@ -467,16 +467,19 @@ class TransformStep:
 
 
 # Golden input/output pair for end-to-end pipeline verification.
-# Numerical blobs are stored as .npy files in assets/ and referenced by
-# path + sha256 hash.  This keeps the passport JSON lean and diffable.
+# Stores N consecutive frames (e.g. 10) so that replay can construct a
+# temporal input with genuinely distinct past frames.  The replay command
+# selects the last n_obs_steps frames, builds the stacked temporal input,
+# runs a single model forward pass, and compares against expected_output.
 @dataclass
 class ReferenceTestVector:
-    input_state_path: Optional[str] = None               # relative to ckpt root, .npy
+    n_frames: int = 10                                   # how many consecutive frames are stored
+    input_state_path: Optional[str] = None               # relative to ckpt root, .npy shape (n_frames, state_dim)
     input_state_hash: Optional[str] = None               # sha256 of the .npy file
-    expected_output_path: Optional[str] = None            # relative to ckpt root, .npy
+    expected_output_path: Optional[str] = None            # relative to ckpt root, .npy shape (horizon, action_dim)
     expected_output_hash: Optional[str] = None            # sha256 of the .npy file
-    input_images_path: Optional[str] = None               # dir containing reference PNGs
-    input_images_hash: Dict[str, str] = field(default_factory=dict)  # {cam_key: sha256}
+    input_images_path: Optional[str] = None               # dir containing {cam}_{frame:03d}.png
+    input_images_hash: Dict[str, List[str]] = field(default_factory=dict)  # {cam_key: [sha256 per frame]}
     input_prompt: str = ""
     tolerance: float = 1e-4
     torch_seed: int = 0
@@ -706,6 +709,22 @@ def _model_identity_from_dict(data) -> ModelIdentity:
     return mi
 
 
+def _pretrained_asset_from_dict(data) -> PretrainedAsset:
+    """Load a PretrainedAsset with backward compat for old field names."""
+    if not data or not isinstance(data, dict):
+        return PretrainedAsset(submodule="")
+    d = dict(data)
+    if "timm_string" in d and "source_identifier" not in d:
+        d["source_identifier"] = d.pop("timm_string")
+    elif "timm_string" in d:
+        d.pop("timm_string")
+    if "hf_revision" in d and "source_revision" not in d:
+        d["source_revision"] = d.pop("hf_revision")
+    elif "hf_revision" in d:
+        d.pop("hf_revision")
+    return _dict_to_dataclass(PretrainedAsset, d)
+
+
 def _model_internals_from_dict(data) -> ModelInternals:
     if data is None:
         return ModelInternals()
@@ -721,7 +740,7 @@ def _model_internals_from_dict(data) -> ModelInternals:
         buffers=[_dict_to_dataclass(BufferEntry, b) for b in data.get("buffers", []) or []],
         state_dict=_dict_to_dataclass(StateDictBlock, data.get("state_dict")),
         pretrained_provenance=[
-            _dict_to_dataclass(PretrainedAsset, a)
+            _pretrained_asset_from_dict(a)
             for a in data.get("pretrained_provenance", []) or []
         ],
         quantization=_dict_to_dataclass(QuantizationBlock, data.get("quantization")),

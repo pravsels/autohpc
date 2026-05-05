@@ -22,10 +22,6 @@ from ..extraction import CheckpointExtraction
 from ..observation import Observation, Status
 from ..passport import PassportLoadResult
 from ..schema import (
-    ActionSpec,
-    ImageSpec,
-    InputContract,
-    StateSpec,
     TrainingDatasetSpec,
 )
 
@@ -297,7 +293,7 @@ def check_input_contract_vs_norm_stats(
     ext: CheckpointExtraction,
 ) -> Observation:
     """Norm sources point at real files; declared dims match file metadata;
-    stats fingerprint (file sha256 + per-dim q02/q98 sample) matches.
+    stats fingerprint (file sha256) matches.
 
     Catches the wrong-stats-file bug -- if the upstream skill computed the
     fingerprint from one file and a different file got shipped, this fires.
@@ -369,36 +365,11 @@ def check_input_contract_vs_norm_stats(
                     "actual_sha256": actual_sha,
                 })
 
-        # Fingerprint: per-dim q02 / q98 sample (compare elementwise)
-        for q_key in ("per_dim_q02", "per_dim_q98", "per_dim_q02_at_t0", "per_dim_q98_at_t0"):
-            declared_q = fp.get(q_key)
-            if declared_q is None:
-                continue
-            # Find matching field in the stats file -- support both flat
-            # and per-timestep layouts.
-            actual_q = _stats_quantile_sample(stats_data, label, q_key)
-            if actual_q is None:
-                findings.append({
-                    "kind": "fingerprint_quantile_unavailable",
-                    "side": label,
-                    "key": q_key,
-                })
-                continue
-            if not _quantiles_close(declared_q, actual_q):
-                findings.append({
-                    "kind": "fingerprint_quantile_mismatch",
-                    "side": label,
-                    "key": q_key,
-                    "passport": declared_q[:5],  # truncated for display
-                    "actual": actual_q[:5],
-                })
-
     if findings:
         # Distinguish hard-fail kinds from soft signals.
         hard_kinds = {
             "source_file_missing", "source_unreadable",
             "dim_mismatch", "fingerprint_sha_mismatch",
-            "fingerprint_quantile_mismatch",
         }
         any_hard = any(f["kind"] in hard_kinds for f in findings)
         return Observation(
@@ -557,14 +528,13 @@ def check_training_datasets_present(load: PassportLoadResult) -> Observation:
 # Loose: HF repo names are "user/name", commits are 7-40 hex chars.
 _REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
 _COMMIT_RE = re.compile(r"^[0-9a-f]{7,40}$")
+_NULL_COMMIT_RE = re.compile(r"^0{7,40}$")
 
 
 def check_training_datasets_resolvable(load: PassportLoadResult) -> Observation:
     """Format-only: each entry has a plausible repo string and commit sha.
 
-    Best-effort HF API existence is intentionally NOT done here -- it would
-    add network calls to the default validation flow. Leave that for an
-    opt-in flag in a future iteration.
+    Hard-fails on missing/malformed fields or placeholder all-zeros commits.
     """
     if not load.has_passport:
         return _not_checked("training_datasets_resolvable", "no passport loaded")
@@ -586,13 +556,15 @@ def check_training_datasets_resolvable(load: PassportLoadResult) -> Observation:
             problems.append("repo not 'user/name'")
         if not d.commit or not _COMMIT_RE.match(d.commit):
             problems.append("commit not 7-40 hex chars")
+        elif _NULL_COMMIT_RE.match(d.commit):
+            problems.append("commit is all-zeros placeholder")
         if problems:
             bad.append({"index": i, "repo": d.repo, "commit": d.commit, "problems": problems})
 
     if bad:
         return Observation(
             check="training_datasets_resolvable",
-            status=Status.SOFT_SIGNAL,
+            status=Status.FAIL,
             message=f"{len(bad)} training dataset entry(ies) have malformed "
                     "repo/commit fields",
             details={"problems": bad},
@@ -656,48 +628,6 @@ def _config_state_dim(config: Dict[str, Any]) -> Optional[int]:
         if shape:
             return shape[0]
     return None
-
-
-def _stats_quantile_sample(
-    stats_data: Any,
-    side: str,
-    q_key: str,
-) -> Optional[List[float]]:
-    """Best-effort lookup of a per-dim quantile inside a stats file.
-
-    Stats files vary in layout. We support:
-      stats_data[side]["q02"]                   -> flat list
-      stats_data[side]["q02"][0]                -> per-timestep, take t=0
-    The skill is responsible for keeping its fingerprint format stable;
-    here we just try to find a comparable list.
-    """
-    if not isinstance(stats_data, dict):
-        return None
-    block = stats_data.get(side[:-1] if side == "actions" else side)
-    if block is None:
-        # try the singular form too -- "actions" -> "action"
-        block = stats_data.get("action") if side == "actions" else None
-    if not isinstance(block, dict):
-        return None
-
-    # Strip _at_t0 / per_dim_ prefixes when looking up the quantile name.
-    base = q_key.replace("per_dim_", "").replace("_at_t0", "")
-    raw = block.get(base)
-    if raw is None:
-        return None
-    # Per-timestep layout: list of lists. Take t=0 sample.
-    if raw and isinstance(raw[0], list):
-        return list(raw[0])
-    return list(raw)
-
-
-def _quantiles_close(a: List[float], b: List[float], rtol: float = 1e-5, atol: float = 1e-7) -> bool:
-    if len(a) != len(b):
-        return False
-    for x, y in zip(a, b):
-        if abs(x - y) > atol + rtol * abs(y):
-            return False
-    return True
 
 
 def _local_dataset_candidate(d: TrainingDatasetSpec) -> Optional[Path]:

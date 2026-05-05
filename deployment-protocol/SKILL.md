@@ -49,6 +49,56 @@ Treat preflight as a comparison across three sources of truth:
 
 The agent's job is to line these up and prove that they agree.
 
+## Evidence Standard: Code-First Verification
+
+The agent's primary job during preflight is to **write and execute verification
+code**, not to fill in audit tables by hand. For each chain element, the agent
+writes a Python block that:
+
+1. Loads the passport (expected values)
+2. Loads the real artifact (dataset sample, model, adapter, output tensor)
+3. Compares them with `assert` statements
+4. Prints a structured pass/fail result
+
+The script output IS the audit evidence. If an assertion fails, that element
+fails. If code cannot run (e.g. missing data), the element fails. The agent
+never eyeballs two values and decides if they match -- Python does that.
+
+### What the agent writes vs. what Python checks
+
+| Agent responsibility | Python responsibility |
+|---|---|
+| Choose the right entry point and loading code | Execute it |
+| Decide which passport fields to compare | Assert equality/ranges |
+| Interpret semantic questions (is this the right camera?) | N/A -- agent judgment |
+| Write the verification script | Catch mismatches deterministically |
+
+### Rules
+
+- **This is validation, not debugging.** The agent's job is to report what
+  it finds, not to fix problems. If a check fails, report the failure. Do not
+  modify the assertion to make it pass. Do not patch the code to work around
+  the issue. Do not "help" by accepting a close-enough match. A mismatch is
+  a mismatch -- report it and stop.
+- **Never modify an assertion after it fails.** Write the check, run it. If
+  it fires, that element fails. Do not go back and relax the check to accept
+  the observed value. The whole point of preflight is to catch exactly these
+  mismatches before they reach production.
+- **Passport values are "expected", never "observed."** The script loads the
+  passport into an `expected` dict and the real artifact into an `observed`
+  dict. Assertions compare them.
+- **No manual pass/fail decisions.** If the code runs without assertion errors,
+  the element passes. If an assertion fires, it fails. The agent does not
+  override.
+- **Missing data is a code error, not a judgment call.** If loading a sample
+  throws KeyError or a modality is absent, the script catches the exception
+  and reports fail. The agent does not substitute passport values.
+- **The script is the artifact.** Save it alongside the audit markdown so
+  another engineer can re-run it later.
+- **Agent judgment is reserved** for elements that genuinely cannot be
+  automated: source selection, semantic camera matching, deployment context
+  safety. For those, the agent writes a brief rationale instead of code.
+
 ## Hybrid Preflight (Validator + Agent)
 
 Preflight is hybrid. `validate-checkpoint` owns deterministic artifact and
@@ -203,6 +253,19 @@ inferring it from config names alone. Record the concrete entrypoint,
 container/image, relevant config, and code paths that implement each chain
 element.
 
+Start from the actual deployment entry point -- the script or command that
+would be run in production. Follow it through any config loading, factory
+routing, architecture detection, or adapter selection to the final model class.
+Name every file and function in that chain. If the entry point uses a config
+file, open it and record the values that control model class, architecture,
+stats path, dtype, and any other deployment-critical settings. Compare those
+values against the passport before proceeding to the chain audit.
+
+Do not skip the routing layer by going directly to the adapter or model class.
+A real deployment goes through the entry point, and faults in the routing layer
+(wrong architecture in config, factory fallback to wrong class) are invisible
+if you bypass it.
+
 ### Step 4: Build a simple deployment bindings record
 
 This can be a YAML file, markdown table, or audit note in the target repo.
@@ -219,155 +282,256 @@ for example:
 Keep it local to the deployment target. Do not create a general-purpose
 package for it here.
 
-### Step 5: Run the preflight checks
+Every binding must come from actually reading the target repo's code or config,
+not from guessing based on the passport. If the runner has no image input, the
+image binding should be empty or absent -- do not fill it from the passport and
+assume it works. If you cannot determine a binding from the target repo, record
+it as `unknown` and note the gap.
 
-Run the audit in order. Do not jump ahead. Use the same ten chain elements
-defined in the rubric. For each element, record:
+### Step 5: Write and run the preflight verification script
 
-- observed: what was actually seen or executed
-- expected: what the passport, signoff, bindings, or runner says should
-  happen
-- result: `pass`, `fail`, or `unreached`
-- evidence: where the proof lives, such as sample IDs, file paths, command
-  lines, logs, saved tensors, or code paths
-- notes: the mismatch or reason, if any
+Write a single Python script (or a small set of scripts) that exercises the
+full chain. The script loads the passport, loads the real artifacts, and uses
+`assert` statements to compare them. Run the script and paste its output as
+the audit evidence. Save the script alongside the audit markdown.
 
-#### Element 1: Source identity
+Structure the script with one section per element. Each section prints a
+header, runs the checks, and prints PASS or FAIL. If an earlier element fails
+hard (especially element 4), skip later sections and print UNREACHED.
 
-Validator support: none beyond passport fields such as camera serials or
-reference-frame paths. Agent responsibility: identify the actual live device,
-topic, replay dataset, log, sample ID, timestamp, and any local binding layer.
+Below is the pattern for each element. Adapt the code to the specific
+checkpoint, adapter, and dataset -- these are templates, not copy-paste.
 
-- in `live-rig` mode, identify exactly which camera, sensor, topic, device,
-  or stream is bound to each logical source
-- in `replay` mode, identify exactly which dataset, log, recording, sample
-  ID, and timestamp/index is being used
-- record enough source provenance that another engineer can fetch the same
-  source again later
+#### Element 1: Source identity (agent judgment + code)
 
-#### Element 2: Raw source sample
+```python
+# Element 1: Source identity
+# Agent judgment: is this the right source for this deployment?
+# Use whatever dataset loader the target repo uses (e.g. HF datasets,
+# a custom loader, or the framework's dataset class).
+ds = load_dataset(REPLAY_REPO_ID)  # adapt to target repo's loader
+sample = ds[0]
+print(f"source: {REPLAY_REPO_ID}")
+print(f"num_samples: {len(ds)}")
+print(f"keys: {sorted(sample.keys())}")
+# AGENT: confirm this source is appropriate for the deployment context
+```
 
-Validator support: expected shapes, dtypes, value ranges, and camera metadata
-from the passport. Agent responsibility: inspect at least one raw sample before
-preprocessing and compare it to those expectations.
+#### Element 2: Raw source sample (code-checkable)
 
-- inspect at least one raw sample per source before trusting the rest of the
-  run
-- record raw key names, shapes, dtypes, value ranges, and simple summaries
-- for images, record layout, channel order, and whether values appear raw or
-  already transformed
-- for state, record sub-keys, dims, units, coord frames, and obvious sanity
+```python
+# Element 2: Raw source sample — compare against passport
+import json, torch
+passport = json.load(open(PASSPORT_PATH))
+sample = ds[0]
 
-#### Element 3: Source-to-passport bindings
+# --- Check all passport image keys exist ---
+for img_spec in passport["input_contract"].get("images", []):
+    key = img_spec["key"]
+    assert key in sample, f"FAIL E2: passport image key '{key}' missing from dataset"
+    val = sample[key]
+    assert isinstance(val, torch.Tensor), f"FAIL E2: {key} is not a tensor"
+    print(f"  {key}: shape={val.shape}, dtype={val.dtype}, "
+          f"min={val.min():.4f}, max={val.max():.4f}")
 
-Validator support: declared image keys, state sub-keys, rename maps, temporal
-indices, and camera identity fields. Agent responsibility: prove each observed
-source maps to exactly one passport input and that any remap layer is explicit.
+# --- Check state keys exist ---
+for state_spec in passport["input_contract"].get("state", []):
+    key = state_spec["key"]
+    assert key in sample, f"FAIL E2: passport state key '{key}' missing from dataset"
+    val = sample[key]
+    print(f"  {key}: shape={val.shape}, dtype={val.dtype}, "
+          f"min={val.min():.4f}, max={val.max():.4f}")
 
-- every passport image key and state sub-key has exactly one source
-- units, coord frames, timing, ordering, and history expectations match the
-  passport
-- if replay keys differ from passport keys, the binding/remap layer is made
-  explicit and checked here
-- if a source starts after the raw-observation boundary, mark that as a chain
-  gap instead of pretending the top of the chain was checked
+# --- Check action keys exist ---
+action_key = "action"
+assert action_key in sample, f"FAIL E2: '{action_key}' missing from dataset"
+print(f"  {action_key}: shape={sample[action_key].shape}")
 
-#### Element 4: Checkpoint identity and integrity
+print("Element 2: PASS")
+```
 
-Validator support: this is the strongest static stage. Run
-`validate-checkpoint <ckpt> --require-signoff` and record hard failures, soft
-signals, and not-checked rows. Agent responsibility: confirm the target runner
-is pointed at the same checkpoint bundle the validator checked.
+#### Element 3: Source-to-passport bindings (code-checkable)
 
-If the validator reports any hard failure, stop here. Do not inspect the runner,
-load the model, or run a dry-run to "see if it still works." This element has
-failed, the final verdict is `FAIL`, and elements 5-10 are `unreached`.
+```python
+# Element 3: Source-to-passport bindings
+input_contract = passport["input_contract"]
+for key, spec in input_contract.items():
+    val = sample[key]
+    if "shape" in spec and isinstance(val, torch.Tensor):
+        expected_shape = tuple(spec["shape"])
+        # Compare relevant dims (e.g. last dim for state, C/H/W for images)
+        assert val.shape[-len(expected_shape):] == expected_shape, \
+            f"FAIL: {key} shape {val.shape} vs expected {expected_shape}"
+print("Element 3: PASS")
+```
 
-- checkpoint has a valid passport and signoff
-- deployment bindings point at the intended checkpoint, passport, and signoff
-- recompute and verify signed artifact hashes against `SIGNOFF.json`
-- confirm any declared norm stats files or config references resolve to the
-  intended artifacts
+#### Element 4: Checkpoint identity and integrity (validator)
 
-Static checkpoint validation supports this element, but by itself it is still
-not preflight.
+```python
+# Element 4: Run validator
+import subprocess, sys
+result = subprocess.run(
+    ["validate-checkpoint", CKPT_PATH, "--require-signoff", "--show-not-checked"],
+    capture_output=True, text=True
+)
+print(result.stdout)
+if result.returncode != 0 or "❌" in result.stdout:
+    print("Element 4: FAIL — hard validator failure, stopping here")
+    for i in range(5, 11):
+        print(f"Element {i}: UNREACHED")
+    sys.exit(1)
+print("Element 4: PASS")
+```
 
-#### Element 5: Runtime model load path and model internals
+#### Element 5: Runtime model load path (code-checkable)
 
-Validator support: class/module resolution, required package versions, Python
-constraint, dtype breakdown, state-dict completeness, and smoke-test buckets.
-Agent responsibility: confirm the deployment runner did not bypass this loader,
-silently cast dtype, or fall back to another class path.
+This is the most important code-checkable element. Every field below MUST be
+asserted -- do not skip any, do not treat mismatches as "not blocking."
 
-- runner is loading the intended checkpoint path
-- actual class/module path used at runtime matches the passport
-- actual dtype used at runtime matches the passport
-- model structure on load is consistent with what the passport says should be
-  there
-- if the runner falls back to a different loader, class path, config, or
-  dtype, that is a fail
+```python
+# Element 5: Load model through the DEPLOYMENT entry point and check class
+# Adapt imports to the target repo's actual entry point / factory
+from <target_repo>.adapters.factory import load_policy_adapter
+info = load_policy_adapter(policy_path=CKPT_PATH, device="cpu")
+adapter = info.adapter
+policy = adapter.policy
 
-#### Element 6: Preprocessing and transformation steps
+# --- Class identity (MUST match exactly) ---
+expected_class = passport["model_identity"]["class_name"]
+actual_class = type(policy).__name__
+assert actual_class == expected_class, \
+    f"FAIL E5: class_name mismatch: runtime={actual_class}, passport={expected_class}"
 
-Validator support: transform-pipeline declarations, norm stats fingerprints,
-reference test vector, and normalization round-trip results. Agent
-responsibility: trace the actual runner path from raw sample to model-facing
-tensors and name every adapter or transform layer.
+expected_module = passport["model_identity"]["class_module"]
+actual_module = type(policy).__module__
+assert actual_module == expected_module, \
+    f"FAIL E5: class_module mismatch: runtime={actual_module}, passport={expected_module}"
 
-- trace the transformations from raw source sample toward model input
-- confirm resize, crop, dtype conversion, color order, layout changes,
-  history assembly, normalization, and batch assembly match the passport and
-  runner code
-- when norm stats are part of the contract, inspect them directly and check
-  that normalize -> unnormalize behaves as expected on representative data
-- if the chain cannot explain how a raw key becomes a model input key, this
-  element fails
+# --- Temporal structure (MUST match passport exactly) ---
+expected_horizon = passport["output_spec"]["actions"]["horizon"]
+actual_horizon = policy.config.horizon
+assert actual_horizon == expected_horizon, \
+    f"FAIL E5: horizon mismatch: runtime={actual_horizon}, passport={expected_horizon}"
 
-#### Element 7: Final model input contract
+expected_action_dim = passport["input_contract"]["actions"]["total_dim"]
+actual_action_dim = policy.config.action_feature.shape[0]
+assert actual_action_dim == expected_action_dim, \
+    f"FAIL E5: action_dim mismatch: runtime={actual_action_dim}, passport={expected_action_dim}"
 
-Validator support: expected keys, shapes, dtypes, temporal axes, and value
-ranges. Agent responsibility: capture what the model actually received in the
-target runner and compare it against the passport, not just against config.
+actual_n_obs_steps = policy.config.n_obs_steps
+actual_n_action_steps = policy.config.n_action_steps
+print(f"  n_obs_steps={actual_n_obs_steps}, n_action_steps={actual_n_action_steps}")
+# n_action_steps <= horizon is required; if passport records it, assert equality
+assert actual_n_action_steps <= actual_horizon, \
+    f"FAIL E5: n_action_steps ({actual_n_action_steps}) > horizon ({actual_horizon})"
 
-- capture the actual tensors or structured inputs presented to the model
-- record model input keys, shapes, dtypes, sequence/history axes, and value
-  summaries
-- confirm the observed final model inputs match the passport contract, not
-  just the runner author's intent
-- this element is about what the model actually received, not just what the
-  code appears to prepare
+# --- Print summary ---
+print(f"Element 5: PASS — {actual_class} from {actual_module}, "
+      f"horizon={actual_horizon}, action_dim={actual_action_dim}, "
+      f"n_obs_steps={actual_n_obs_steps}, n_action_steps={actual_n_action_steps}")
+```
 
-#### Element 8: Model output shape and value sanity
+If any assertion fails, this element fails. Do not continue to element 6.
 
-Validator support: smoke-test liveness, distribution, range, determinism, and
-NaN/Inf buckets. Agent responsibility: run one no-emit dry run through the
-target path and record the actual output shape, dtype, range, and obvious
-sanity.
+#### Element 6: Preprocessing and transformation steps (code-checkable)
 
-- run one safe dry-run inference through the target repo's real preprocessing
-  and model code
-- record output keys, shapes, dtypes, and simple value sanity
-- confirm the observed model outputs match the checkpoint/passport
-  expectations closely enough to continue
+```python
+# Element 6: Run sample through adapter preprocessing, check shapes
+raw_sample = ds[0]
+# Use the adapter's own preprocessing (not manual transforms)
+preprocessed = adapter.preprocess(raw_sample)  # adapt to actual API
+for key, tensor in preprocessed.items():
+    print(f"  {key}: {tensor.shape} {tensor.dtype}")
+    # Assert shapes match what the model expects
+print("Element 6: PASS")
+```
 
-#### Element 9: Output unnormalization and post-processing
+#### Element 7: Final model input contract (code-checkable)
 
-Validator support: declared post-processing, action dims, delta mask, norm
-mask, normalization round-trip, and expected range. Agent responsibility:
-confirm the target runner applies the same unnormalize, clipping, smoothing,
-and delta-to-absolute behavior before command formation.
+```python
+# Element 7: Capture actual model input shapes
+# Hook or inspect the batch dict right before model.forward()
+batch = adapter.build_batch(raw_sample)  # adapt to actual API
+for key, val in batch.items():
+    if isinstance(val, torch.Tensor):
+        expected = passport["input_contract"].get(key, {})
+        print(f"  {key}: shape={val.shape}, dtype={val.dtype}")
+        if "shape" in expected:
+            # check relevant dimensions
+            pass
+print("Element 7: PASS")
+```
 
-- confirm output-side unnormalization and post-processing match what the
-  deployment path is expected to do
-- record the reconstructed action or command payload after output-side
-  transforms
-- if there are output masks, clipping, frame conversions, or delta-to-absolute
-  reconstruction steps, check them here
+#### Element 8: Model output shape and value sanity (code-checkable)
 
-#### Element 10: Would-be emission behavior
+```python
+# Element 8: Run forward pass, check output against passport
+with torch.no_grad():
+    output = adapter.predict(sample)  # adapt to actual API
 
-Validator support: action shape, horizon, control rate, and latency fields.
-Agent responsibility: prove the run is no-emit, name the publish/actuation path
+print(f"  output shape: {output.shape}")
+print(f"  output dtype: {output.dtype}")
+print(f"  output range: [{output.min():.4f}, {output.max():.4f}]")
+print(f"  output mean: {output.mean():.4f}")
+
+# --- Sanity (MUST pass) ---
+assert not torch.isnan(output).any(), "FAIL E8: NaN in output"
+assert not torch.isinf(output).any(), "FAIL E8: Inf in output"
+
+# --- Action dim (MUST match passport) ---
+expected_action_dim = passport["input_contract"]["actions"]["total_dim"]
+assert output.shape[-1] == expected_action_dim, \
+    f"FAIL E8: action_dim mismatch: output={output.shape[-1]}, passport={expected_action_dim}"
+
+# --- Horizon / action chunk length (MUST match passport) ---
+expected_horizon = passport["output_spec"]["actions"]["horizon"]
+actual_chunk_len = output.shape[-2] if output.dim() >= 2 else 1
+# Output chunk may be n_action_steps (a slice of horizon). Both are valid
+# but the chunk length must be <= horizon and > 0.
+assert 0 < actual_chunk_len <= expected_horizon, \
+    f"FAIL E8: chunk length {actual_chunk_len} outside [1, {expected_horizon}]"
+
+# --- Cross-check with Element 5 config values ---
+assert actual_chunk_len == policy.config.n_action_steps, \
+    f"FAIL E8: output chunk {actual_chunk_len} != config.n_action_steps {policy.config.n_action_steps}"
+
+print(f"Element 8: PASS — shape={output.shape}, range=[{output.min():.4f}, {output.max():.4f}]")
+```
+
+If a forward pass cannot run, this element fails. Do not fill in shapes from
+config or passport attributes.
+
+#### Element 9: Output unnormalization and post-processing (code-checkable)
+
+```python
+# Element 9: Unnormalize output and check physical plausibility
+unnormed = adapter.unnormalize(output)  # adapt to actual API
+print(f"unnormalized range: [{unnormed.min():.4f}, {unnormed.max():.4f}]")
+# Agent judgment: are these values physically plausible for this robot?
+# e.g. joint angles in [-pi, pi], velocities within motor limits
+print("Element 9: PASS (pending agent review of value ranges)")
+```
+
+#### Element 10: Would-be emission behavior (agent judgment)
+
+```python
+# Element 10: Emission check
+# Agent judgment: confirm dry-run mode, no robot commands sent
+# Verify the deployment path has a no-emit / dry-run flag
+print("Element 10: agent confirms no-emit mode is active")
+```
+
+### Adapting the templates
+
+The code above is a starting pattern. The agent must adapt it to the target
+repo's actual API -- different adapters, different factory functions, different
+predict methods. The key constraint is: **every comparison between expected and
+observed must be an `assert` statement in code, not a manual judgment.**
+
+If an element genuinely requires agent judgment (source selection, semantic
+camera matching, physical plausibility), the agent writes a brief rationale
+in a comment or print statement. But shapes, class names, config values,
+dtypes, and ranges are always code-checked.
 that would have been used, and confirm the payload semantics match the robot
 controller.
 
