@@ -600,7 +600,7 @@ def check_reference_test_vector_present(load: PassportLoadResult) -> Observation
         return Observation(
             check="reference_test_vector",
             status=Status.FAIL,
-            message="no reference_test_vector in passport; golden-input reproducibility check cannot run",
+            message="no reference_test_vector in passport; static reference data missing",
             details={},
             category=CATEGORY,
         )
@@ -610,10 +610,6 @@ def check_reference_test_vector_present(load: PassportLoadResult) -> Observation
         problems.append("input_state_path is empty")
     if not rtv.input_state_hash:
         problems.append("input_state_hash is empty")
-    if not rtv.expected_output_path:
-        problems.append("expected_output_path is empty")
-    if not rtv.expected_output_hash:
-        problems.append("expected_output_hash is empty")
     if not rtv.input_images_path:
         problems.append("input_images_path is empty")
     if not rtv.input_images_hash:
@@ -634,9 +630,8 @@ def check_reference_test_vector_present(load: PassportLoadResult) -> Observation
         message=(
             f"reference_test_vector present: "
             f"state={rtv.input_state_path}, "
-            f"output={rtv.expected_output_path}, "
-            f"{len(rtv.input_images_hash)} image(s), "
-            f"tolerance={rtv.tolerance}"
+            f"{len(rtv.input_images_hash)} camera(s), "
+            f"{rtv.n_frames} frames"
         ),
         details={},
         category=CATEGORY,

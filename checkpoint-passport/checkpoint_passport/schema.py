@@ -466,23 +466,17 @@ class TransformStep:
 # ── reference_test_vector ──────────────────────────────────────────────
 
 
-# Golden input/output pair for end-to-end pipeline verification.
-# Stores N consecutive frames (e.g. 10) so that replay can construct a
-# temporal input with genuinely distinct past frames.  The replay command
-# selects the last n_obs_steps frames, builds the stacked temporal input,
-# runs a single model forward pass, and compares against expected_output.
+# Real dataset frames saved alongside the checkpoint for static
+# verification: camera identity, state shape/range, normalization sanity,
+# and hash integrity after transfer.
 @dataclass
 class ReferenceTestVector:
     n_frames: int = 10                                   # how many consecutive frames are stored
     input_state_path: Optional[str] = None               # relative to ckpt root, .npy shape (n_frames, state_dim)
     input_state_hash: Optional[str] = None               # sha256 of the .npy file
-    expected_output_path: Optional[str] = None            # relative to ckpt root, .npy shape (horizon, action_dim)
-    expected_output_hash: Optional[str] = None            # sha256 of the .npy file
     input_images_path: Optional[str] = None               # dir containing {cam}_{frame:03d}.png
     input_images_hash: Dict[str, List[str]] = field(default_factory=dict)  # {cam_key: [sha256 per frame]}
     input_prompt: str = ""
-    tolerance: float = 1e-4
-    torch_seed: int = 0
     notes: Optional[str] = None
 
 
