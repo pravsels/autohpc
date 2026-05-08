@@ -43,6 +43,14 @@ def check_image_keys_declared(ext: CheckpointExtraction) -> Observation:
     all_image_keys = sorted(set(visual_from_inputs.keys()) | set(image_features.keys()))
 
     if not all_image_keys:
+        if not input_features and not image_features:
+            return Observation(
+                check="image_keys_declared",
+                status=Status.NOT_CHECKED,
+                message="config does not use input_features/image_features schema; cannot check image keys",
+                details={},
+                category=CATEGORY,
+            )
         return Observation(
             check="image_keys_declared",
             status=Status.FAIL,

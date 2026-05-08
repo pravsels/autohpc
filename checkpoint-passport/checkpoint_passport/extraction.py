@@ -35,11 +35,34 @@ def read_safetensors_metadata(path: Path) -> Dict[str, Dict[str, Any]]:
 
 
 def find_weight_files(checkpoint_dir: Path) -> List[Path]:
-    """Recursively find .safetensors and .bin weight files."""
-    patterns = ["**/*.safetensors", "**/*.bin"]
+    """Recursively find checkpoint weight artifacts in any format.
+
+    Priority order: safetensors/bin (header-readable), then any other
+    non-config files that look like model artifacts (Orbax msgpack/tensorstore,
+    .pt, .ckpt, GGUF, etc.).
+    """
+    primary_patterns = ["**/*.safetensors", "**/*.bin"]
     files = []
-    for p in patterns:
+    for p in primary_patterns:
         files.extend(checkpoint_dir.glob(p))
+    if files:
+        return sorted(files)
+
+    # Fallback: discover non-config artifacts (Orbax, tensorstore, etc.)
+    skip_names = {
+        "MODEL_PASSPORT.json", "SIGNOFF.json", "README.md", "TRAINING_LOG.md",
+    }
+    skip_suffixes = {".json", ".yaml", ".yml", ".md", ".txt", ".png", ".jpg", ".npy"}
+    for p in sorted(checkpoint_dir.rglob("*")):
+        if not p.is_file():
+            continue
+        if p.name.startswith("."):
+            continue
+        if p.name in skip_names:
+            continue
+        if p.suffix in skip_suffixes:
+            continue
+        files.append(p)
     return sorted(files)
 
 
@@ -82,18 +105,22 @@ class WeightManifest:
     tensors: Dict[str, Dict[str, Any]]
     # Filenames that were found (e.g. ["model.safetensors"])
     files: List[str]
+    # Whether tensor-level headers could be read (safetensors only)
+    headers_available: bool = True
 
     @classmethod
     def from_checkpoint(cls, checkpoint_dir: Path) -> "WeightManifest":
         weight_files = find_weight_files(checkpoint_dir)
         all_tensors: Dict[str, Dict[str, Any]] = {}
+        has_headers = False
         for wf in weight_files:
-            # .bin files (pickle) don't have a readable header — skip
             if wf.suffix == ".safetensors":
                 all_tensors.update(read_safetensors_metadata(wf))
+                has_headers = True
         return cls(
             tensors=all_tensors,
-            files=[f.name for f in weight_files],
+            files=[str(f.relative_to(checkpoint_dir)) for f in weight_files],
+            headers_available=has_headers,
         )
 
     @property

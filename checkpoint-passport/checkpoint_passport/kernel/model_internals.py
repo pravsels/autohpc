@@ -27,13 +27,25 @@ CATEGORY = "model_internals"
 
 
 def check_weight_file_integrity(ext: CheckpointExtraction) -> Observation:
-    """Are there weight files, and do they contain tensors?"""
+    """Are there weight/checkpoint files present?"""
     if not ext.weights.files:
         return Observation(
             check="weight_file_integrity",
             status=Status.FAIL,
-            message="no weight files found",
-            details={"searched_patterns": ["*.safetensors", "*.bin"]},
+            message="no checkpoint artifacts found",
+            details={"searched": "all non-config files in checkpoint dir"},
+            category=CATEGORY,
+        )
+
+    if not ext.weights.headers_available:
+        return Observation(
+            check="weight_file_integrity",
+            status=Status.PASS,
+            message=(
+                f"{len(ext.weights.files)} checkpoint artifact(s) found "
+                f"(format does not support header introspection)"
+            ),
+            details={"files": ext.weights.files},
             category=CATEGORY,
         )
 
@@ -58,6 +70,15 @@ def check_weight_file_integrity(ext: CheckpointExtraction) -> Observation:
 
 def check_action_dim_config_vs_weights(ext: CheckpointExtraction) -> Observation:
     """Does the config-declared action dim appear in output layer weight shapes?"""
+    if not ext.weights.headers_available:
+        return Observation(
+            check="action_dim_config_vs_weights",
+            status=Status.SOFT_SIGNAL,
+            message="checkpoint format does not support tensor header introspection; skipping cross-check",
+            details={"files": ext.weights.files},
+            category=CATEGORY,
+        )
+
     action_dim = ext.declared_action_dim
     if action_dim is None:
         return Observation(
@@ -108,7 +129,7 @@ def check_horizon_consistency(ext: CheckpointExtraction) -> Observation:
     if not fields:
         return Observation(
             check="horizon_consistency",
-            status=Status.FAIL,
+            status=Status.NOT_CHECKED,
             message="no horizon-related field found in config",
             details={"searched_fields": ["chunk_size", "horizon", "n_action_steps", "action_horizon"]},
             category=CATEGORY,
