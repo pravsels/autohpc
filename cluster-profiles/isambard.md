@@ -99,10 +99,25 @@ GIT_ASKPASS="$ASKPASS" GIT_TERMINAL_PROMPT=0 git clone https://github.com/<org>/
 rm -f "$ASKPASS"
 ```
 
+## Wandb Sync (inside Apptainer)
+
+Wandb is not installed on login nodes. Sync offline runs from inside the container:
+
+```bash
+srun --ntasks=1 --cpu-bind=cores apptainer exec \
+  --bind "/scratch/<project>/<user>:/scratch/<project>/<user>" \
+  --bind "/home/<project>/<user>:/home/<project>/<user>" \
+  "/scratch/<project>/<user>/<repo>/container/<sif_file>" \
+  bash -c "export WANDB_API_KEY=<key> && python -m wandb sync --project <project_name> <path/to/offline-run-dir>"
+```
+
+Use `--project` (or the legacy `--override project=<name>`) to control which W&B project receives the run.
+
 ## Notes
 
 - Login nodes are assigned randomly; do not assume a persistent session.
 - Do not run compute workloads on login nodes — use Slurm.
+- `/tmp` is node-local and not shared between login and compute nodes. Write scripts and temp files to scratch or home.
 - Architecture is arm64 — Docker images built for amd64 will not work. Check with `uname -m` on the cluster.
 - `--nv` flag in Apptainer injects host NVIDIA libs via `LD_LIBRARY_PATH`. Never overwrite this variable inside the container — always append to it.
 - Do not store secrets or credentials here.

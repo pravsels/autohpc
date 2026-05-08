@@ -48,6 +48,8 @@ The single biggest pain in passport generation is recovering things that should 
 
 If any of the above is missing on a checkpoint you've been asked to passport, **stop and ask the user** before guessing. A passport built from guesses defeats the purpose.
 
+**Frameworks that don't serialize config:** Some training stacks (e.g. JAX/Orbax checkpoints) keep the resolved config in Python code rather than writing `config.json` to the checkpoint directory. In that case, write a small script that instantiates the training config object and dumps it as JSON to the checkpoint root before running `generate-passport`. Run this inside the model's own container so all config dataclasses resolve correctly.
+
 ## Phase 1 — Static extraction (no torch, no GPU, no container)
 
 Run `generate-passport` to deterministically extract every field that can be read from files on disk. Do **not** write `MODEL_PASSPORT.json` by hand — the tool reads `config.json`, norm stats, weight files, and git state, then emits the passport using the canonical `schema.py` dataclasses. Hand-authored passports have historically recorded wrong values (e.g. writing a dirty-tree class name as the canonical `class_name`).
