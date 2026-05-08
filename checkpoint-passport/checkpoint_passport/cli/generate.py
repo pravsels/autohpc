@@ -89,13 +89,17 @@ def _git_remote_url(repo: Path) -> Optional[str]:
 
 
 def _git_is_dirty(repo: Path) -> Tuple[bool, str]:
+    """Check if tracked files have uncommitted changes (ignores untracked files)."""
     try:
         r = subprocess.run(
             ["git", "-C", str(repo), "status", "--porcelain"],
             capture_output=True, text=True, timeout=10,
         )
-        output = r.stdout.strip()
-        return bool(output), output
+        tracked_changes = "\n".join(
+            line for line in r.stdout.strip().splitlines()
+            if not line.startswith("??")
+        ).strip()
+        return bool(tracked_changes), tracked_changes
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return False, ""
 

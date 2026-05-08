@@ -246,7 +246,10 @@ def check_deployment_repo_commit(
         ["git", "-C", str(target_repo), "status", "--porcelain"],
         capture_output=True, text=True, timeout=10,
     )
-    dirty_files = dirty.stdout.strip()
+    dirty_files = "\n".join(
+        line for line in dirty.stdout.strip().splitlines()
+        if not line.startswith("??")
+    ).strip()
 
     failures = []
     if actual_commit != expected:
