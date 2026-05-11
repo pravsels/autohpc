@@ -12,6 +12,7 @@ separately from validation errors (passport/signoff integrity failures).
 
 Usage:
     check-publish-ready <checkpoint_dir>
+    check-publish-ready <checkpoint_dir> --dataset-path /path/to/local/dataset
     check-publish-ready <checkpoint_dir> --target-repo /path/to/deploy/repo
     check-publish-ready <checkpoint_dir> --json
 
@@ -69,6 +70,7 @@ class PublishReadyResult:
 def check_publish_ready(
     checkpoint_dir: str | Path,
     *,
+    dataset_path: str | Path | None = None,
     target_repo: str | Path | None = None,
 ) -> PublishReadyResult:
     """Check whether a checkpoint directory is ready for HF upload.
@@ -140,6 +142,7 @@ def check_publish_ready(
             result = self_validate_passport(
                 ckpt,
                 require_signoff=True,
+                dataset_path=dataset_path,
                 target_repo=target_repo,
             )
             for obs in result.observations:
@@ -169,6 +172,10 @@ def main() -> None:
         help="output structured JSON instead of human-readable report",
     )
     parser.add_argument(
+        "--dataset-path", type=Path, default=None,
+        help="local LeRobot dataset directory; enables input_contract_vs_dataset",
+    )
+    parser.add_argument(
         "--target-repo", type=Path, default=None,
         help="deployment target repo; enables deployment_repo_commit check",
     )
@@ -176,6 +183,7 @@ def main() -> None:
 
     result = check_publish_ready(
         args.checkpoint_dir,
+        dataset_path=args.dataset_path,
         target_repo=args.target_repo,
     )
 

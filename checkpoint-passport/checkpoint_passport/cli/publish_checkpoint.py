@@ -12,12 +12,16 @@ Usage:
     publish-checkpoint upload \
       --checkpoint-dir <ckpt> \
       --repo-id <user-or-org>/<repo> \
-      --revision main
+      --revision main \
+      [--dataset-path /path/to/local/dataset] \
+      [--target-repo /path/to/deploy/repo]
 
     publish-checkpoint download \
       --repo-id <user-or-org>/<repo> \
       --revision <sha-or-branch> \
-      --out <local_dir>
+      --out <local_dir> \
+      [--dataset-path /path/to/local/dataset] \
+      [--target-repo /path/to/deploy/repo]
 
 Exit code 0 = success.  Exit code 1 = gate failure or runtime error.
 """
@@ -27,6 +31,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import Optional
 
 from checkpoint_passport import self_validate_passport
 from checkpoint_passport.cli.check_publish_ready import check_publish_ready
@@ -95,13 +100,20 @@ def upload_checkpoint(
     repo_id: str,
     revision: str,
     ignore_patterns: list[str] | None = None,
+    *,
+    dataset_path: Optional[str | Path] = None,
+    target_repo: Optional[str | Path] = None,
 ) -> None:
     """Upload a checkpoint to HF Hub, gated by check-publish-ready.
 
     Raises PublishGateError if the checkpoint is not publish-ready.
     """
     ckpt = Path(checkpoint_dir)
-    result = check_publish_ready(ckpt)
+    result = check_publish_ready(
+        ckpt,
+        dataset_path=dataset_path,
+        target_repo=target_repo,
+    )
     if not result.ready:
         msg = "Checkpoint is not publish-ready:\n"
         for err in result.errors:
@@ -115,6 +127,9 @@ def download_checkpoint(
     repo_id: str,
     revision: str,
     out: str | Path,
+    *,
+    dataset_path: Optional[str | Path] = None,
+    target_repo: Optional[str | Path] = None,
 ) -> Path:
     """Download a checkpoint from HF Hub, gated by post-download validation.
 
@@ -124,7 +139,12 @@ def download_checkpoint(
     out_path = Path(out)
     downloaded = _hf_download(repo_id, revision, out_path)
 
-    result = self_validate_passport(downloaded, require_signoff=True)
+    result = self_validate_passport(
+        downloaded,
+        dataset_path=dataset_path,
+        target_repo=target_repo,
+        require_signoff=True,
+    )
     if result.has_failures:
         failures = [
             f"{o.check}: {o.message}"
@@ -164,6 +184,14 @@ def main() -> None:
         "--ignore-patterns", type=str, nargs="+", default=None,
         help="glob patterns to exclude from upload (e.g. 'retain/**')",
     )
+    up.add_argument(
+        "--dataset-path", type=Path, default=None,
+        help="local LeRobot dataset directory; enables input_contract_vs_dataset",
+    )
+    up.add_argument(
+        "--target-repo", type=Path, default=None,
+        help="deployment target repo; enables deployment_repo_commit check",
+    )
 
     # ── download ──
     down = subparsers.add_parser("download", help="Download checkpoint from HF Hub")
@@ -179,6 +207,14 @@ def main() -> None:
         "--out", type=Path, required=True,
         help="local directory to download into",
     )
+    down.add_argument(
+        "--dataset-path", type=Path, default=None,
+        help="local LeRobot dataset directory; enables input_contract_vs_dataset",
+    )
+    down.add_argument(
+        "--target-repo", type=Path, default=None,
+        help="deployment target repo; enables deployment_repo_commit check",
+    )
 
     args = parser.parse_args()
 
@@ -189,6 +225,8 @@ def main() -> None:
                 repo_id=args.repo_id,
                 revision=args.revision,
                 ignore_patterns=args.ignore_patterns,
+                dataset_path=args.dataset_path,
+                target_repo=args.target_repo,
             )
             print(
                 f"Uploaded {args.checkpoint_dir} to "
@@ -200,6 +238,8 @@ def main() -> None:
                 repo_id=args.repo_id,
                 revision=args.revision,
                 out=args.out,
+                dataset_path=args.dataset_path,
+                target_repo=args.target_repo,
             )
             print(
                 f"Downloaded {args.repo_id}@{args.revision} to "

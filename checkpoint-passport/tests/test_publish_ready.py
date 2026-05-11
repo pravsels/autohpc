@@ -30,6 +30,7 @@ from checkpoint_passport.cli.check_publish_ready import (
 from checkpoint_passport.cli.publish_checkpoint import (
     upload_checkpoint,
     download_checkpoint,
+    main as publish_checkpoint_main,
     PublishGateError,
     ValidationGateError,
 )
@@ -98,7 +99,32 @@ def test_check_publish_ready_forwards_target_repo(tmp_path):
     mock_validate.assert_called_once_with(
         ckpt,
         require_signoff=True,
+        dataset_path=None,
         target_repo=target_repo,
+    )
+
+
+def test_check_publish_ready_forwards_dataset_path(tmp_path):
+    ckpt = _make_ready_checkpoint(tmp_path)
+    dataset_path = tmp_path / "dataset"
+    dataset_path.mkdir()
+
+    mock_result = MagicMock()
+    mock_result.has_failures = False
+    mock_result.observations = []
+
+    with patch(
+        "checkpoint_passport.cli.check_publish_ready.self_validate_passport",
+        return_value=mock_result,
+    ) as mock_validate:
+        result = check_publish_ready(ckpt, dataset_path=dataset_path)
+
+    assert result.ready is True
+    mock_validate.assert_called_once_with(
+        ckpt,
+        require_signoff=True,
+        target_repo=None,
+        dataset_path=dataset_path,
     )
 
 
@@ -133,6 +159,7 @@ def test_check_publish_ready_cli_accepts_target_repo(tmp_path, monkeypatch, caps
     mock_validate.assert_called_once_with(
         ckpt,
         require_signoff=True,
+        dataset_path=None,
         target_repo=target_repo,
     )
 
@@ -374,6 +401,87 @@ def test_upload_calls_hf_when_ready(tmp_path):
     mock_upload.assert_called_once_with(ckpt, "test-org/test-repo", "main", ignore_patterns=None)
 
 
+def test_upload_forwards_validation_context_to_publish_gate(tmp_path):
+    ckpt = _make_ready_checkpoint(tmp_path)
+    dataset_path = tmp_path / "dataset"
+    target_repo = tmp_path / "deploy"
+    dataset_path.mkdir()
+    target_repo.mkdir()
+
+    mock_ready = MagicMock()
+    mock_ready.ready = True
+    mock_ready.errors = []
+
+    with patch(
+        "checkpoint_passport.cli.publish_checkpoint.check_publish_ready",
+        return_value=mock_ready,
+    ) as mock_gate, patch(
+        "checkpoint_passport.cli.publish_checkpoint._hf_upload"
+    ):
+        upload_checkpoint(
+            checkpoint_dir=ckpt,
+            repo_id="test-org/test-repo",
+            revision="main",
+            dataset_path=dataset_path,
+            target_repo=target_repo,
+        )
+
+    mock_gate.assert_called_once_with(
+        ckpt,
+        dataset_path=dataset_path,
+        target_repo=target_repo,
+    )
+
+
+def test_publish_upload_cli_accepts_validation_context(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    ckpt = _make_ready_checkpoint(tmp_path)
+    dataset_path = tmp_path / "dataset"
+    target_repo = tmp_path / "deploy"
+    dataset_path.mkdir()
+    target_repo.mkdir()
+
+    mock_ready = MagicMock()
+    mock_ready.ready = True
+    mock_ready.errors = []
+
+    with patch(
+        "checkpoint_passport.cli.publish_checkpoint.check_publish_ready",
+        return_value=mock_ready,
+    ) as mock_gate, patch(
+        "checkpoint_passport.cli.publish_checkpoint._hf_upload"
+    ):
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "publish-checkpoint",
+                "upload",
+                "--checkpoint-dir",
+                str(ckpt),
+                "--repo-id",
+                "test-org/test-repo",
+                "--revision",
+                "main",
+                "--dataset-path",
+                str(dataset_path),
+                "--target-repo",
+                str(target_repo),
+            ],
+        )
+        publish_checkpoint_main()
+
+    assert "Uploaded" in capsys.readouterr().out
+    mock_gate.assert_called_once_with(
+        ckpt,
+        dataset_path=dataset_path,
+        target_repo=target_repo,
+    )
+
+
 # ── 11. Download refuses when validation fails ──────────────────────────
 
 
@@ -415,3 +523,37 @@ def test_download_succeeds_when_validation_passes(tmp_path):
 
     assert result_path == out_dir
     mock_val.assert_called_once()
+
+
+def test_download_forwards_validation_context(tmp_path):
+    out_dir = _make_ready_checkpoint(tmp_path)
+    dataset_path = tmp_path / "dataset"
+    target_repo = tmp_path / "deploy"
+    dataset_path.mkdir()
+    target_repo.mkdir()
+
+    with patch(
+        "checkpoint_passport.cli.publish_checkpoint._hf_download",
+        return_value=out_dir,
+    ), patch(
+        "checkpoint_passport.cli.publish_checkpoint.self_validate_passport",
+    ) as mock_val:
+        mock_result = MagicMock()
+        mock_result.has_failures = False
+        mock_val.return_value = mock_result
+
+        result_path = download_checkpoint(
+            repo_id="test-org/test-repo",
+            revision="abc123",
+            out=out_dir,
+            dataset_path=dataset_path,
+            target_repo=target_repo,
+        )
+
+    assert result_path == out_dir
+    mock_val.assert_called_once_with(
+        out_dir,
+        dataset_path=dataset_path,
+        target_repo=target_repo,
+        require_signoff=True,
+    )
