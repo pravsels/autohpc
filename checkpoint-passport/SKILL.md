@@ -9,279 +9,249 @@ description: Use right after a training run finishes and `wandb sync` (or equiva
 
 Two artifacts at the checkpoint root:
 
-- **`MODEL_PASSPORT.json`** — a chain-of-custody document from sensor to action output. Every entity (sensor reading, image, state vector, action) and every transformation (resize, normalize, delta, clip, unnormalize) is recorded so it can be audited. The passport covers: input contract, model identity (including runtime constraints), model internals, output spec, weight integrity, provenance (including checkpoint lineage), the ordered transform pipeline, reference test vectors, normalization round-trip results, and known issues.
-- **`SIGNOFF.json`** — sha256 of the passport plus every weight file the passport declares, plus a verdict and a one-line reason. Signed signoffs only ever carry verdict `pass` or `soft_signal`; the schema reserves `fail` for completeness, but the signer refuses to write a signoff at all when validation reports hard failures (it exits non-zero and prints the failures, leaving no signoff on disk).
+- **`MODEL_PASSPORT.json`** — chain-of-custody from sensor to action output. Records input contract, model identity, model internals, output spec, weight integrity, provenance, transform pipeline, reference test vectors, and known issues.
+- **`SIGNOFF.json`** — sha256 of the passport plus every weight file, a verdict, and a one-line reason. The signer refuses to write a signoff when validation reports hard failures.
 
-Together they let any consumer (a robot, an eval harness, a teammate's repo) call `validate-checkpoint <ckpt_dir> --require-signoff` as a load-time gate. Non-zero exit means do not load this checkpoint.
+Together they let any consumer run `validate-checkpoint <ckpt_dir> --require-signoff` as a load-time gate. Non-zero exit means do not load.
 
-**Where this fits:** post-train, pre-anything-else. The passport is generated immediately after the training run finishes and `wandb sync` confirms the run is intact, **before** the checkpoint is copied off the training filesystem. That includes HF uploads being used purely as a transport mechanism — by the time the checkpoint exists on HF, the passport must ride with it. The eval harness is itself a passport consumer (it reads `input_contract` to drive how the model is fed); evaling first and passporting later means an eval-feeding bug can silently corrupt your eval numbers.
+**Where this fits:** post-train, pre-anything-else. The passport is generated immediately after training finishes, **before** the checkpoint is copied off the training filesystem. That includes HF uploads used purely as transport — by the time the checkpoint exists on HF, the passport must ride with it.
 
-The skill ships a runnable Python package (`checkpoint_passport`) with the schema, a `validate-checkpoint` CLI (most checks run on any host; `model_identity_resolvable` and the typed smoke buckets need the model's own container — see Phase 3), and a `sign-checkpoint` CLI that hashes everything and writes the signoff. Read `checkpoint_passport/schema.py` once — it is the single source of truth for every field name and type referenced below.
+The skill ships a runnable Python package (`checkpoint_passport`). Read `checkpoint_passport/schema.py` once — it is the single source of truth for every field name and type.
 
 ## When to Use
 
 - A training run just finished, `wandb sync` succeeded, and the checkpoint dir has no `MODEL_PASSPORT.json` / `SIGNOFF.json`.
-- The user is about to `huggingface-cli upload` / push the checkpoint to a registry.
-- The user is about to `rsync` / `scp` a checkpoint to an eval box, a robot, or a colleague.
-- A consuming repo's CI or eval harness wants to gate startup on `validate-checkpoint --require-signoff`.
+- The user is about to upload / push / copy the checkpoint anywhere.
+- A consuming repo wants to gate startup on `validate-checkpoint --require-signoff`.
 
-Do not skip the passport for "experimental" or "internal-only" checkpoints, and do not defer it until "after eval looks good". The whole point is to detect drift between trainer and consumer *before* the consumer (including your own eval harness) acts on bad assumptions; "I know what's in this one" doesn't survive a week, and "eval will catch any feeding bug" is exactly what eval can't catch when it's the one doing the bad feeding.
+Do not skip the passport for "experimental" or "internal-only" checkpoints. Do not defer it until "after eval looks good."
 
-## Authoritative References
+## Two Valid Passport Creation Paths
 
-- **Schema**: `checkpoint_passport/schema.py` in this folder. Every field, type, and convention. Read it before doing anything else.
-- **Validator semantics**: `checkpoint_passport/kernel/*.py`. Each file is one section's checks; the docstrings explain pass / soft-signal / fail criteria.
-- **CLIs**: `generate-passport`, `validate-checkpoint`, `sign-checkpoint` (installed by `pip install -e .` from this folder).
+There are exactly two ways to create a passport. Choose the one that matches the checkpoint.
 
-## Prerequisites (training-side metadata)
+### Path A: Config-Bearing Checkpoints (LeRobot, RAMEN, etc.)
 
-The single biggest pain in passport generation is recovering things that should have been captured at training time. The launcher script that submits the training job MUST drop these into the checkpoint directory before training starts:
-
-- **Training-repo commit SHA** (`git rev-parse HEAD` in the model code repo at submit time). Without this you cannot reproduce the exact model class definitions.
-- **Dataset commit SHAs / HF revisions** for every dataset used (one per `--dataset` arg).
-- **Dataset loader class** for each dataset (e.g. `lerobot.datasets.LeRobotDataset`). The wrong loader silently misses video-encoded images or applies different key mappings.
-- **Model class identity** — `class_name` and `class_module` from the training stack. Without these the validator cannot confirm the correct model class loads.
-- **Pretrained backbone revisions** — `source_revision` (commit SHA) or `source_identifier` (model string) for every external pretrained submodule. Unpinned backbones drift silently across pip installs.
-- **Deployment-repo commit SHA** (`git rev-parse HEAD` in the target deployment repo). The validator hard-fails on mismatch or dirty tree when `--require-signoff` is active. Without this, code changes in the deployment adapter go undetected.
-- **Resolved config** — the merged hyperparameter config the trainer actually used, written as `config.json` in the checkpoint root (most frameworks already do this).
-- **Run-log pointer** — either a sanitised local `TRAINING_LOG.md` or the W&B / MLflow URL.
-
-If any of the above is missing on a checkpoint you've been asked to passport, **stop and ask the user** before guessing. A passport built from guesses defeats the purpose.
-
-**Frameworks that don't serialize config:** Some training stacks (e.g. JAX/Orbax checkpoints) keep the resolved config in Python code rather than writing `config.json` to the checkpoint directory. In that case, write a small script that instantiates the training config object and dumps it as JSON to the checkpoint root before running `generate-passport`. Run this inside the model's own container so all config dataclasses resolve correctly.
-
-## Phase 1 — Static extraction (no torch, no GPU, no container)
-
-Run `generate-passport` to deterministically extract every field that can be read from files on disk. Do **not** write `MODEL_PASSPORT.json` by hand — the tool reads `config.json`, norm stats, weight files, and git state, then emits the passport using the canonical `schema.py` dataclasses. Hand-authored passports have historically recorded wrong values (e.g. writing a dirty-tree class name as the canonical `class_name`).
+These checkpoints ship a `config.json` that fully describes the input/output contract. One command produces `MODEL_PASSPORT.json`:
 
 ```bash
 cd <autohpc>/checkpoint-passport
 
-# Minimal (checkpoint only):
-uv run generate-passport <ckpt_dir>
-
-# Full (with deployment + training repo binding and dataset info):
-uv run generate-passport <ckpt_dir> \
+generate-passport <ckpt_dir> \
+  --config <ckpt_dir>/config.json \
+  --stats <ckpt_dir>/stats.json \
   --target-repo <deployment_repo_path> \
   --training-repo <training_code_repo_path> \
-  --dataset-repo <hf_dataset_id> \
-  --loader-class <dataset_loader_class>
+  --dataset user/dataset@abc123:lerobot.datasets.LeRobotDataset
 ```
 
-The tool will:
-- Refuse to run if `--target-repo` is dirty (uncommitted changes)
-- Extract `deployment_repo_commit` and `training_repo_commit` via `git rev-parse HEAD`
-- Parse `config.json` for input/output contract, inference parameters, temporal spec, language spec
-- Hash every inference-critical file for `weight_integrity`
-- Extract norm stats fingerprints (q02/q98 at t0) and `norm_mask`
-- Derive `delta_dims` from `rot6d_slice`
-- Record pretrained provenance from `observation_encoder` config
+`--config` is required. `--stats`, `--target-repo`, `--training-repo`, `--dataset` are optional but strongly recommended. `--resolve-remote-revisions` is the only path that calls HF APIs; it is off by default.
 
-After running, review the output and iterate with `validate-checkpoint <ckpt> --show-not-checked` to see which checks still need data. Fields the tool leaves null (needs Phase 2 or judgment) are printed in the summary.
+After this, skip to [Validate](#validate).
 
-**What the tool extracts vs. what you fill in manually:**
+### Path B: OpenPI Checkpoints (No Static Config)
 
-| Auto-extracted by `generate-passport` | Left null (Phase 2 / judgment) |
-|---|---|
-| `input_contract.images[]` (shape, resize, color, dtype, normalization) | `images[].physical_mounting`, `camera_serial`, `camera_usb_path` |
-| `input_contract.state` (dim, sub_keys, normalization + fingerprint) | `model_identity.class_name`, `class_module`, `library_versions` |
-| `input_contract.actions` (dim, horizon, sub_keys, norm_mask, delta_dims) | `model_internals` (parameters, state_dict, numerical_health) |
-| `input_contract.language` (tokenizer, max_sequence_length) | `output_spec.smoke_results` |
-| `input_contract.temporal` (n_obs_steps, delta_indices) | `reference_test_vector` |
-| `output_spec.inference_parameters` (diffusion/regression config) | `norm_round_trip_results` |
-| `weight_integrity.weight_files[]` (path, sha256, size) | `transform_pipeline[]` (partially derivable, needs code reading) |
-| `provenance.*` (repos, commits, config hash, run log) | `known_issues[]` |
-| `model_internals.pretrained_provenance[]` (from config) | `pretrained_provenance[].source_revision` (needs HF API or model load) |
-| `model_internals.forward_graph` (input/output keys + shapes) | `model_identity.runtime_constraints` (needs version knowledge) |
+OpenPI does not have a passport-compatible static config. Its inference contract is constructed at runtime by `cfg.data.create()`, transforms, norm stats, and adapter behavior. This path has two steps: extract a passport seed, then assemble the final passport.
 
-**Conventions worth knowing now (full reasoning lives in the schema docstrings):**
+#### Step 1: Extract Passport Seed
 
-- `state.sub_keys` describes the **model-facing** layout — i.e. what the forward pass sees, after any rotation expansion. For the raw dataset layout, look at `config.json::dataset_schema` if present. The two often disagree (e.g. a 6D rotation source expanded to 9D rot6d); the validator's `state_dim_consistency` soft signal will report the divergence — that's expected, document it in the passport.
-- Norm-stats fingerprint: `stats_fingerprint.file_sha256` pins the stats file by hash. The validator verifies the on-disk file matches the declared hash. Inline quantile arrays (`per_dim_q02` etc.) are no longer emitted — the sha256 is the authoritative integrity check and is already covered by `weight_integrity` for signed checkpoints.
-- `provenance.run_log_path` accepts either a relative `.md` path under the checkpoint repo OR an `http(s)://` URI to an external dashboard (W&B, MLflow). Pick whichever is the canonical pointer for this run.
-- `provenance.deployment_repo` + `provenance.deployment_repo_commit` pin the deployment target repo (e.g. the robotics stack that hosts the adapter). At preflight time, `validate-checkpoint --target-repo <path>` hard-fails if the repo's HEAD doesn't match or the working tree is dirty. This catches adapter swaps, local patches, and version drift without relying on agent reasoning.
-- `training_datasets[].loader_class` records the Python class used to load the dataset (e.g. `"lerobot.datasets.LeRobotDataset"`). Preflight agents must use this loader, not a generic `datasets.load_dataset()` — the wrong loader can silently miss video-encoded images or apply different key mappings.
-- `weight_integrity.weight_files[]` should list **every** file that ships with the checkpoint and is loaded at inference time, not just the safetensors. That includes `config.json`, norm stats, tokenizer files. The signer hashes everything in this list.
-- `actions.delta_dims` is now a structured `DeltaSpec` with `delta_mask: List[bool]` (per-dim: `True` = delta, `False` = absolute) and `absolute_dims_reason` (e.g. "6D rotation (rot6d) passed through unchanged"). This replaces the free-text format from v0.1.
-- `transform_pipeline` is a top-level ordered list of `TransformStep`. Populate one entry for each data transformation from raw sensor to model input and from model output to robot command. Example steps: resize, ImageNet normalize, rotation expansion, RAMEN normalize, delta computation, camera stacking, temporal stacking, text tokenization, RAMEN unnormalize, delta-to-absolute conversion.
-- `runtime_constraints` on `model_identity` declares inference-time version requirements (contract), separate from `library_versions` (historical). Populate `required_versions` with pinned versions that **must** match (e.g. `transformers==5.4.0`), and `known_incompatible` with version ranges known to break.
-- `known_issues` is a top-level list documenting environment/library/config bugs with workarounds and severity. Each issue has `check_type` to indicate whether code or an agent should verify it.
+Run inside the **OpenPI runtime environment** (not a generic Python). If imports fail, stop and report the missing module.
 
-**Pretrained-backbone provenance:** for any external pretrained submodule (HF model, timm model, custom URL), record an entry in `model_internals.pretrained_provenance[]` with `source_identifier` (the framework's own model name, e.g. full timm string like `vit_base_patch16_clip_224.openai` for timm, or HF repo id for HuggingFace). For HF assets, also populate `source_revision` with the commit SHA — `huggingface_hub.HfApi().model_info(repo).sha` returns it in one call. For timm assets, `source_identifier` alone is sufficient (the model name is the pin).
-
-## Phase 2 — Dynamic extraction (in the model's own container)
-
-Load the model, walk it, run one forward pass on a synthetic calibration batch. This is the only phase that needs torch / GPU / the model package.
-
-**Before you start:** if `provenance.deployment_repo` is set, verify the deployment repo is clean. A dirty working tree means you'd be extracting dynamic information from modified code — the passport would not reflect what was actually signed off.
+**Config-level extraction only (no GPU needed):**
 
 ```bash
-git -C <deployment_repo> status --porcelain
+extract-passport-seed openpi \
+  --checkpoint-dir <ckpt> \
+  --out <ckpt>/PASSPORT_SEED.json \
+  --openpi-config-name <name> \
+  --default-prompt "<prompt>" \
+  --resize-size 224
 ```
 
-If there is any output, **stop and ask the user**. Do not proceed with dynamic extraction against a dirty deployment repo.
-
-**Finding the right environment.** You need the model's own runtime — not the
-system Python. Discover what's available before proceeding:
+**With runtime enrichment + reference test vector (requires GPU):**
 
 ```bash
-# micromamba / mamba / conda
-micromamba env list 2>/dev/null || mamba env list 2>/dev/null || conda env list 2>/dev/null
-# virtualenvs in the target repo
-find <target_repo> -maxdepth 3 -name "pyvenv.cfg" -o -name "activate" 2>/dev/null
-# Docker images
-docker images | grep -i "<repo_name_or_model_name>"
+extract-passport-seed openpi \
+  --checkpoint-dir <ckpt> \
+  --out <ckpt>/PASSPORT_SEED.json \
+  --openpi-config-name <name> \
+  --default-prompt "<prompt>" \
+  --resize-size 224 \
+  --device cuda \
+  --reference-dataset-path <dataset_path> \
+  --reference-episode-index <episode> \
+  --reference-start-frame <frame> \
+  --reference-num-frames 10
 ```
 
-If none of these exist, check the target repo's README or setup docs for
-environment creation instructions. If nothing is documented, ask the user —
-do not install dependencies into the system Python or guess at versions.
+When `--device` is provided, the extractor loads the model via the internal RuntimeAdapter protocol and collects:
+- Library versions (Python, JAX, torch, OpenPI)
+- Parameter count (via `flax.nnx` for JAX, fallback to PyTorch)
+- Smoke inference (one forward pass through `policy.infer()`)
 
-**Container contract** — these are non-negotiable:
+When `--reference-dataset-path` is also provided, the extractor loads real consecutive frames from the dataset and writes:
+- `assets/reference_test_vector/input_states.npy` — state vectors
+- `assets/reference_test_vector/images/<camera>_<frame>.png` — image frames
+- Hashes for all reference files in the seed
 
-1. **Run inside the model package's own container**, not a generic torch image. The container's torch / CUDA / dependency versions go straight into `model_identity.library_versions`.
-2. **Bind-mount the training-repo source at the recorded commit SHA**, mounted read-only at e.g. `/repo:ro`, with `PYTHONPATH=/repo/src` (or wherever the package lives in that repo). Reason: the version installed in the container's image is almost always stale and will fail to load the checkpoint's config (draccus / pydantic / dataclasses all reject unknown fields). The launcher's commit SHA is the source of truth.
-3. **Purge any pre-imported copy of the model package from `sys.modules`** before importing it from the bind-mount. Otherwise you'll silently use the stale installed version even after PYTHONPATH is set:
-   ```python
-   for name in list(sys.modules):
-       if name == "<package>" or name.startswith("<package>."):
-           del sys.modules[name]
-   ```
-4. **GPU access** (`docker run --gpus all ...`) — required. Forward pass on CPU is 10× slower for no benefit and the validator can't tell the difference.
+**The reference test vector is required for signing.** Do not skip it. Do not substitute synthetic data for production passports. Do not write a separate dataset sampling script — the checked-in extractor command is the only valid path.
 
-**Calibration batch** (for smoke tests only) — build it from `config.json` shapes. No hardcoding. For images use `torch.rand` (uniform `[0,1]`, matching most models' expected pre-normalization input range); for state use `torch.randn`; for language use the trained `default_prompt`. Use a small batch (1 or 2) — the smoke tests don't need volume, just signal. Note: the synthetic calibration batch is **only** for `smoke_results`. The `reference_test_vector` must use real data — see below.
+For MVP testing without model/dataset, `--dummy-reference-vector` generates synthetic data. This is for CI only — it does not satisfy production signing requirements.
 
-**Inference call** — use the **public inference API** the deployment will use, not the lowest-level `forward()`. The two often differ in input preprocessing (image stacking across cameras, time-axis layout, attention mask construction). If you call `forward()` directly with your own preprocessing, you'll smoke-test a code path no real consumer ever runs. Read what the model's serving entry point (`select_action`, `predict`, `__call__`, etc.) does and reproduce its preprocessing in the calibration batch.
+#### Step 2: Assemble Passport
 
-**What to populate from the dynamic run:**
-
-- `model_identity.library_versions` — torch, python, cuda, the model package, all transitive deps you can list (`pkg_resources` or `importlib.metadata`).
-- `model_internals.module_hierarchy` — walk `named_modules()`, build a tree (top 2 levels for structural identification; full tree is recoverable from `named_modules()`).
-- `model_internals.parameters.summary` — totals (total_params, trainable, frozen, bytes, dtype_breakdown). Per-parameter list (`by_name`) was removed in v0.2; it's recoverable from `safe_open(path).metadata()`.
-- `model_internals.buffers` — `named_buffers()`.
-- `model_internals.state_dict` — `expected_keys_count`, `found_keys_count`, plus `missing_keys` / `unexpected_keys` from `model.load_state_dict(..., strict=False)`.
-- `model_internals.numerical_health` — run forward twice with the same `torch.manual_seed(0)`, confirm no NaN/Inf, confirm `max_abs_diff == 0` between the two passes.
-- `output_spec.smoke_results` — five typed buckets (`determinism`, `nan_inf`, `liveness`, `distribution`, `range_check`). Each is its own sub-dataclass in the schema with explicit fields — read `SmokeResults` in `schema.py` before populating. Each bucket needs `status: "pass" | "fail"`. The acceptance range for `range_check` should be derived from the model's own clip values (`clip_sample_range`, normalization clip values) — don't hardcode.
-- `reference_test_vector` — real data from the training dataset saved alongside the checkpoint for static verification (camera identity, state range/shape checks, normalization sanity). Do NOT use synthetic `torch.rand` / `torch.randn` — use real consecutive frames. Steps:
-  1. Load episode 0, frames 0–9 (10 consecutive frames) from the training HF dataset (e.g. `LeRobotDataset(repo_id, split="train")`).
-  2. Save raw camera images as indexed PNGs to `<ckpt>/assets/reference_frames/{short_key}_{frame:03d}.png` (e.g. `front_000.png` ... `front_009.png`, `wrist_000.png` ... `wrist_009.png`).
-  3. Save all 10 observation state vectors as a single `<ckpt>/assets/reference_test_vector/input_states.npy` with shape `(10, state_dim)`.
-  4. Compute sha256 of each saved file and populate the passport fields:
-     - `reference_test_vector.n_frames` = `10`
-     - `reference_test_vector.input_state_path` / `input_state_hash`
-     - `reference_test_vector.input_images_path` (the directory, e.g. `assets/reference_frames`)
-     - `reference_test_vector.input_images_hash` — `{cam_key: [sha256_frame_0, ..., sha256_frame_9]}` (list of hashes per camera)
-     - `reference_test_vector.input_prompt` (from the dataset's task string)
-  Note: the reference data is for static checks only (camera identity, state shape/range, hash integrity). End-to-end model replay is not included — the adapter's calling convention is model-specific and cannot be exercised generically.
-- `norm_round_trip_results` — for each normalization step in `transform_pipeline`, take a known input, normalize, unnormalize, verify recovery within tolerance. Records `max_abs_error`, `within_clip_bound`, `status`.
-
-Splice the dynamic JSON into the static draft (a small Python script merging the two dicts is fine). The passport is now complete.
-
-## Check Classification — Static vs Dynamic
-
-Every checkable claim in the passport falls into one of two categories:
-
-**Static checks (code runs, pass/fail, no judgment):**
-- File hashes match signoff
-- Library versions match `runtime_constraints.required_versions`
-- State dict key count matches
-- Config values match passport (action_dim, horizon, image shapes)
-- Norm stats file sha matches passport fingerprint
-- No NaN/Inf in weights
-- Reference test vector assets are present and hash fields are populated (`validate-checkpoint`)
-- Device paths / camera serials match expected mapping
-- `observation_delta_indices` matches config
-- Transform pipeline steps match code behavior
-- Normalization round-trip invertibility
-
-**Dynamic checks (agent runs, needs judgment or context):**
-- Camera swap detection (visual comparison of live frame to reference)
-- Soft signal triage (is state_dim 13→16 rot6d expansion intentional?)
-- Environment contamination (unexpected PYTHONPATH entries)
-- Output sanity on real data (are actions physically reasonable?)
-- Cross-referencing passport against W&B training logs
-- Deciding if a version mismatch is acceptable or blocking
-- Validating that `physical_mounting` descriptions match physical setup
-
-## Phase 3 — Validate and iterate
-
-Run the validator inside the same container as Phase 2 (it needs to import the model class for `model_identity_resolvable`):
-
+```bash
+assemble-passport \
+  --checkpoint-dir <ckpt> \
+  --seed <ckpt>/PASSPORT_SEED.json \
+  --out <ckpt>/MODEL_PASSPORT.json \
+  --target-repo <deployment_repo_path> \
+  --training-repo <training_code_repo_path>
 ```
+
+The assembler reads the seed, hashes all checkpoint files for `weight_integrity`, populates `provenance` from git state, attaches metadata (`schema_version`, `generated_at`, `generated_by`), and writes `MODEL_PASSPORT.json`.
+
+Use `--skip-dir retain` (repeatable) to exclude training artifacts from hashing. `generate-passport` also accepts `--skip-dir` and `--skip-file` for the same purpose.
+
+## Validate
+
+Run the validator to check the passport:
+
+```bash
+validate-checkpoint <ckpt_dir>
 validate-checkpoint <ckpt_dir> --show-not-checked
 ```
 
-Read the report. Three outcomes:
+Three outcomes:
 
-- **All hard checks pass, no soft signals** → proceed to Phase 4.
-- **Soft signals only** → for each soft signal, decide: is this a passport authoring bug (fix the passport), or a real but acceptable divergence (e.g. `state_dim_consistency` firing for a model with rotation expansion)? Soft signals you accept must be documented in the signoff `--reason` flag in Phase 4.
-- **Any hard fail** → fix the passport (or the checkpoint) and re-run. Do not proceed to Phase 4 with hard fails; the signer will refuse anyway.
+- **All hard checks pass, no soft signals** — proceed to Sign.
+- **Soft signals only** — decide: is this a passport authoring bug (fix the passport), or a real but acceptable divergence (e.g. `state_dim_consistency` firing for rotation expansion)? Soft signals you accept must be documented in the signoff `--reason`.
+- **Any hard fail** — fix the passport or the checkpoint and re-run. Do not proceed to signing with hard fails; the signer will refuse.
 
-Common soft signals and how to handle them:
+Optional flags:
 
-- `state_dim_consistency` (model-facing 16D vs dataset-facing 13D, etc.) → expected for any model with a rotation conversion. Document in `state.sub_keys` and accept in signoff.
-- `input_contract_vs_dataset` reporting `NOT_CHECKED` → the validator can't find the local HF dataset cache snapshot. Either pass `--dataset-path /local/dataset` if you have it, or accept (the cross-check just isn't running, no false claim of pass).
-- `training_datasets_resolvable` soft-signalling on a `null` dataset commit → fix at training-launch time (capture the SHA), then regenerate. Don't ship without dataset commits if you can help it.
+| Flag | Purpose |
+|------|---------|
+| `--show-not-checked` | Include NOT_CHECKED rows (verbose forensic view) |
+| `--target-repo <path>` | Enable deployment_repo_commit check |
+| `--dataset-path <path>` | Enable input_contract_vs_dataset cross-check |
+| `--require-signoff` | Missing SIGNOFF.json becomes hard fail |
+| `--skip-section <category>` | Drop checks for a category while iterating |
 
-## Phase 4 — Sign
+**`--skip-section` is for iteration only.** Do not sign with skipped hard sections. Do not use `--skip-section signoff` with `--require-signoff` (the CLI rejects this combination). If `reference_test_vector` validation fails, fix the extraction — do not bypass validation.
 
-```
-sign-checkpoint <ckpt_dir> --reason '<one-liner if any soft signals>'
+### Common Soft Signals
+
+- **`state_dim_consistency`** (model-facing 16D vs dataset-facing 13D) — expected for rotation expansion. Document in signoff reason.
+- **`training_datasets_resolvable`** reporting unpinned commits — dataset repo IDs are required when known, but **dataset commit pins are optional provenance**. Missing commits are a soft signal, not a hard blocker. Do not add automatic HF API lookup to resolve them in the default flow.
+- **`input_contract_vs_dataset`** NOT_CHECKED — the validator can't find the local HF dataset cache. Pass `--dataset-path` if available, or accept.
+
+## Sign
+
+```bash
+sign-checkpoint <ckpt_dir> --reason '<one-liner explaining any soft signals>'
 ```
 
 The signer:
 
-1. Re-runs `validate-checkpoint` internally. Refuses to sign if there are hard failures (exits 1, prints the failures).
-2. Demands `--reason` when there are soft signals, and prints a paste-able auto-summary listing the check names so you have a starting point.
-3. Hashes `MODEL_PASSPORT.json` plus every file listed in `passport.weight_integrity.weight_files[]`. Auto-discovery — you don't list weight files separately.
-4. Writes `SIGNOFF.json` at the checkpoint root with a verdict derived from the validator (`ship_it` → `pass`, `human_look_here` → `soft_signal`).
-5. Re-runs the validator with `--require-signoff` to confirm round-trip.
+1. Re-runs `validate-checkpoint` internally. Refuses to sign on hard failures (exits 1).
+2. Requires `--reason` when soft signals are present.
+3. Hashes `MODEL_PASSPORT.json` plus every file in `weight_integrity.weight_files[]`.
+4. Writes `SIGNOFF.json` with verdict `pass` or `soft_signal`.
+5. Re-validates with `--require-signoff` to confirm round-trip.
 
-After signing, the deployment gate is one command anywhere:
+`--dry-run` prints the signoff without writing it.
 
+**Do not sign with `--skip-section` active on any hard check.** If `reference_test_vector` is missing from the passport, go back to extraction and add `--reference-dataset-path`. If runtime enrichment is missing, go back and add `--device`. The signing gate exists to catch incomplete passports — do not route around it.
+
+## Publish
+
+Before uploading to HF:
+
+```bash
+check-publish-ready <ckpt_dir>
 ```
+
+This verifies `README.md`, `TRAINING_LOG.md`, `MODEL_PASSPORT.json`, and `SIGNOFF.json` are present, non-empty (for docs), valid JSON (for artifacts), and that the internal validator passes with `require_signoff=True`.
+
+Upload and download use the bounded helpers:
+
+```bash
+publish-checkpoint upload \
+  --checkpoint-dir <ckpt> \
+  --repo-id <user-or-org>/<repo> \
+  --revision main \
+  --ignore-patterns 'retain/**'
+
+publish-checkpoint download \
+  --repo-id <user-or-org>/<repo> \
+  --revision <sha-or-branch> \
+  --out <local_dir>
+```
+
+Upload runs `check-publish-ready` and refuses on failure. Download runs `validate-checkpoint --require-signoff` after fetching and refuses to report success on failure.
+
+**Do not write ad hoc `huggingface-cli upload`, `hf download`, `git lfs`, `rsync`, or Python upload scripts.** If HF auth, repo ID, revision, or output path is missing, stop and ask.
+
+## Deployment Gate
+
+From any consuming repo:
+
+```bash
 validate-checkpoint <ckpt_dir> --require-signoff
+validate-checkpoint <ckpt_dir> --require-signoff --target-repo <deploy_repo>
 ```
 
-Non-zero exit = do not ship.
+Non-zero exit = do not load.
+
+## Stop Gates
+
+Stop and ask the user when:
+
+- **Config-bearing checkpoint has no explicit config path.** Do not discover configs by searching the filesystem.
+- **Architecture is unsupported.** The extractor will list supported backends and fail. Do not guess.
+- **OpenPI config name is missing.** `--openpi-config-name` is required. Do not probe the registry.
+- **OpenPI runtime imports fail.** The environment is wrong. Print the missing module and stop.
+- **OpenPI runtime enrichment fails** because the env, checkpoint assets, or device are unavailable. Report the exact error.
+- **Reference dataset path is missing** when signing requires `reference_test_vector`. Stop and ask for the path, episode index, and frame range.
+- **Reference vector extraction fails** — cannot read frames, too few frames, missing image data. Do not substitute synthetic inputs.
+- **Passport seed validation or assembly fails.** Report the validation errors.
+- **Publish gate fails.** Report which files are missing or which validation checks failed.
+- **HF auth, repo ID, revision, or local output path is missing.** Stop and ask.
+- **Target repo is dirty** (uncommitted changes). Do not generate or assemble a passport against modified deployment code.
+- **Training-repo commit SHA is unknown.** Do not guess — a passport built from guesses defeats the purpose.
+
+## What Not to Do
+
+- Do not write a small config script to produce a fake `config.json` for OpenPI. Its contract is runtime-constructed.
+- Do not discover environments by probing. If the right environment is not active, stop and ask.
+- Do not read source code until you understand the inference path and then fill fields by judgment.
+- Do not write a separate smoke-test script. Smoke testing is built into `extract-passport-seed openpi --device`.
+- Do not write a separate reference vector extraction script. Reference vectors are built into `extract-passport-seed openpi --reference-dataset-path`.
+- Do not write upload/download scripts for HF handoff. Use `publish-checkpoint`.
+- Do not splice JSON with a small script to merge dynamic and static data. Use `assemble-passport`.
+- Do not sign with skipped hard sections for production checkpoints.
+- Do not treat missing `reference_test_vector` as acceptable — fix the extraction.
+- Do not block signing on missing dataset commits when repo IDs are present. That is optional provenance.
 
 ## Quick Reference
 
-| Step | Command |
-|---|---|
-| Install once per env | `uv pip install -e <autohpc>/checkpoint-passport` |
-| Generate passport (Phase 1 static) | `uv run generate-passport <ckpt> --target-repo <deploy_repo> --training-repo <train_repo> --dataset-repo <hf_id> --loader-class <class>` |
-| Validation (host — most checks; `model_identity_resolvable` may fail if class isn't importable) | `validate-checkpoint <ckpt>` |
-| Full validation (in model container) | `docker run --gpus all -v <repo>:/repo:ro -e PYTHONPATH=/repo/src <image> validate-checkpoint <ckpt>` |
-| Show NOT_CHECKED rows (closest thing to a "what's missing in my passport" view) | `validate-checkpoint <ckpt> --show-not-checked` |
-| Skip a section while iterating | `validate-checkpoint <ckpt> --skip-section <category>` |
-| Sign (refuses on hard fails) | `sign-checkpoint <ckpt> --reason '<why soft signals OK>'` |
-| Dry-run sign (print, don't write) | `sign-checkpoint <ckpt> --dry-run` |
-| Deployment gate | `validate-checkpoint <ckpt> --require-signoff` |
-| Deployment gate with target repo binding | `validate-checkpoint <ckpt> --require-signoff --target-repo <deploy_repo>` |
+| Step | Path A (config-bearing) | Path B (OpenPI) |
+|------|------------------------|-----------------|
+| Install | `uv pip install -e <autohpc>/checkpoint-passport` | same |
+| Generate / Extract | `generate-passport <ckpt> --config ...` | `extract-passport-seed openpi --checkpoint-dir <ckpt> --openpi-config-name <name> --device cuda --reference-dataset-path <ds> ...` |
+| Assemble | (not needed) | `assemble-passport --checkpoint-dir <ckpt> --seed <ckpt>/PASSPORT_SEED.json` |
+| Validate | `validate-checkpoint <ckpt>` | same |
+| Sign | `sign-checkpoint <ckpt> --reason '...'` | same |
+| Publish gate | `check-publish-ready <ckpt>` | same |
+| Upload | `publish-checkpoint upload --checkpoint-dir <ckpt> --repo-id ...` | same |
+| Download | `publish-checkpoint download --repo-id ... --out ...` | same |
+| Deployment gate | `validate-checkpoint <ckpt> --require-signoff` | same |
 
 ## After Signing
 
-Once the checkpoint has a passing signoff, the passport's job is done. The next steps depend on the goal — follow the README's phase table to determine which applies:
+Once the checkpoint has a passing signoff, the passport's job is done. The next steps depend on the goal:
 
-- **Evaluate the checkpoint** → follow `eval-tracking/SKILL.md` for eval logs and promotion notes.
-- **Full triage (passport → eval → promotion decision)** → return to the README's "Checkpoint triage" section and resume at step 4.
-- **Deploy to a robot or inference rig** → follow `deployment-protocol/SKILL.md`.
-
-## Common Mistakes
-
-- **Skipping the passport because the checkpoint is "for internal use"** — the whole point is detecting drift, and "internal" use cases drift fastest because no one is paying attention.
-- **Generating the passport in a generic torch container instead of the model's own container** — the recorded `library_versions` then describe an environment no consumer will ever match.
-- **Calling `model.forward()` directly in the smoke test instead of the public inference method** — you smoke-test code no deployment uses; the real serving path's preprocessing bugs go undetected.
-- **Not bind-mounting the training-time source** — the checkpoint's `config.json` will reference fields the container's installed package version doesn't know, and config decoding will fail.
-- **Forgetting to purge `sys.modules` after setting PYTHONPATH** — Python silently keeps the pre-imported stale copy; you waste an hour debugging a "fix" that didn't take effect.
-- **Hardcoding the smoke test's acceptance range** — derive from the model's own clip values; otherwise a config change that legitimately widens the action range will fail validation forever.
-- **Listing only safetensors in `weight_integrity.weight_files[]`** — `config.json` and norm stats files are also required for inference. If they aren't hashed, a corrupted norm stats file will silently produce wrong actions and the signoff won't catch it.
-- **Leaving `source_revision: null` for a HuggingFace pretrained backbone** — one `HfApi.model_info(repo).sha` call away from a pinned revision; without it, `pip install` updates can silently swap the backbone.
-- **Treating soft signals as "good enough, ship it"** — sign with `--reason` and explain *each* soft signal. The reason string is the only audit trail for an acceptance decision.
-- **Editing the passport after signing without re-signing** — the passport sha in the signoff no longer matches; the next `validate-checkpoint --require-signoff` hard-fails. Always re-run `sign-checkpoint` after any passport edit.
-- **Not saving real reference data** — the reference test vector should use real dataset frames (not synthetic data) so that camera identity, state range, and normalization checks have meaningful inputs to verify against.
-- **Generating a passport without the training-repo commit SHA** — you'll guess wrong and produce a passport that documents the wrong code. Stop and ask the user instead.
-- **Leaving `transform_pipeline` empty** — the pipeline is the chain-of-custody. Without it, the passport can't be audited end-to-end.
-- **Leaving `runtime_constraints` empty when there are known version sensitivities** — `library_versions` is historical; if a specific version is *required* for correctness (e.g. transformers API drift), it must be in `runtime_constraints.required_versions`.
-- **Not running the normalization round-trip check** — clipping-induced loss is expected and documented; what catches bugs is wrong stats / wrong function / wrong mask, and the round-trip surfaces all of these.
+- **Evaluate the checkpoint** — follow `eval-tracking/SKILL.md`.
+- **Deploy to a robot or inference rig** — follow `deployment-protocol/SKILL.md`.
+- **Full triage** — return to the root README's "Checkpoint triage" section.

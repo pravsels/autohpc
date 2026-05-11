@@ -551,7 +551,17 @@ uv run pytest tests/test_publish_ready.py -q
 
 Expected: pass.
 
-## Task 7: Rewrite Checkpoint Passport Skill [TODO]
+## Task 7: Rewrite Checkpoint Passport Skill [DONE]
+
+**Post-implementation notes:**
+- Replaced the old Phase 1/2/3/4 structure with two explicit paths: Path A (config-bearing, `generate-passport --config`) and Path B (OpenPI, `extract-passport-seed openpi` → `assemble-passport`).
+- Made `reference_test_vector` first-class: the checked-in `--reference-dataset-path` flag on `extract-passport-seed openpi` is the only valid extraction path. Explicitly prohibits separate sampling scripts and signing with skipped hard sections.
+- Reflected dataset commits as optional provenance (soft signal, not hard blocker) when repo IDs are present.
+- Added comprehensive stop gates: missing config path, unsupported architecture, OpenPI config name, runtime env, dataset path/episode/frame, HF auth/repo/revision, dirty target repo, training-repo commit SHA.
+- Removed all loose instructions: write config scripts, discover environments, read source until inference understood, splice JSON, fill fields by judgment, write smoke-test scripts, write upload/download scripts.
+- Added "What Not to Do" section consolidating prohibitions.
+- Updated `checkpoint-passport/README.md`: lists all 7 commands, describes both paths, points to SKILL.md for workflow.
+- Updated root `README.md`: post-train section describes both paths, publish readiness gate, and `publish-checkpoint` command.
 
 **Files:**
 - Modify: `checkpoint-passport/SKILL.md`
@@ -644,7 +654,12 @@ Agents stop when:
 
 `checkpoint-passport/README.md` should list commands and point to `SKILL.md`. Root `README.md` should point to the bounded workflow and mention publish readiness. Do not duplicate the full workflow in three places.
 
-## Task 8: Run Focused MVP Tests [TODO]
+## Task 8: Run Focused MVP Tests [DONE]
+
+**Post-implementation notes:**
+- Fixed one pre-existing test (`test_upload_calls_hf_when_ready`) that didn't account for the `ignore_patterns=None` kwarg added in Task 6's `--ignore-patterns` feature.
+- Focused suite: 101 passed in 0.42s.
+- Full suite: 101 passed, 1 skipped in 0.41s.
 
 **Files:**
 - Existing tests from Tasks 1-6

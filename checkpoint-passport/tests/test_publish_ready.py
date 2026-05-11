@@ -311,7 +311,7 @@ def test_upload_calls_hf_when_ready(tmp_path):
             revision="main",
         )
 
-    mock_upload.assert_called_once_with(ckpt, "test-org/test-repo", "main")
+    mock_upload.assert_called_once_with(ckpt, "test-org/test-repo", "main", ignore_patterns=None)
 
 
 # ── 11. Download refuses when validation fails ──────────────────────────

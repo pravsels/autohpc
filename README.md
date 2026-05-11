@@ -25,7 +25,7 @@ Adjust the path if your clone location differs.
 - `eval-tracking/SKILL.md`
   - Maintaining per-eval logs for checkpoint evaluations: provenance, metrics, qualitative assessment, verdict.
 - `checkpoint-passport/`
-  - Skill **and** runnable Python package for producing and verifying `MODEL_PASSPORT.json` / `SIGNOFF.json`. Generated **right after training, before the checkpoint moves anywhere** (HF upload, copy to eval box, copy to robot, hand to colleague) — every downstream consumer, including the eval harness itself, reads the passport. Installable: `uv pip install -e checkpoint-passport`.
+  - Skill **and** runnable Python package for producing and verifying `MODEL_PASSPORT.json` / `SIGNOFF.json`. Two bounded paths: config-bearing checkpoints use `generate-passport --config ...`; OpenPI checkpoints use `extract-passport-seed openpi ...` then `assemble-passport ...`. Both converge at validate → sign → publish. HF upload is blocked unless README, training log, passport, and signoff are present and valid. Installable: `uv pip install -e checkpoint-passport`.
 - `deployment-protocol/`
   - Docs-only skill for first-run / fresh-run deployment preflight on a real robot or inference rig. Uses `MODEL_PASSPORT.json`, the target repo's real runner code, and live device samples to verify the whole chain before the first run.
 - `autoresearch/`
@@ -116,7 +116,7 @@ A trained checkpoint sitting on the training filesystem is not yet a deliverable
 
 **Why this ordering:** the eval harness itself is a passport consumer. It reads `input_contract` to know how to feed the model (image dtype, value range, color order, channel layout, state sub-key layout, action post-processing) instead of re-deriving it from training code or hardcoding guesses. If you eval first and passport later, an eval feeding bug will silently corrupt your eval numbers and you'll blame the model. If you upload to HF first and passport later, the HF snapshot is permanently unsigned and any cached copies people made in the interim never get a passport. Passport-then-move closes both holes.
 
-Follow `checkpoint-passport/SKILL.md` (in this repo) to produce the passport, then sign it.
+Follow `checkpoint-passport/SKILL.md` (in this repo). The SKILL describes two bounded paths — one for config-bearing checkpoints (`generate-passport --config ...`) and one for OpenPI checkpoints (`extract-passport-seed openpi ...` then `assemble-passport`). Both converge at validate → sign → publish.
 
 The skill ships a runnable Python package — install once per environment:
 
@@ -126,10 +126,11 @@ uv pip install -e ../autohpc/checkpoint-passport
 
 Then for each checkpoint:
 
-1. Generate `MODEL_PASSPORT.json` per the SKILL (mix of static file inspection and a single forward-pass smoke run inside the model's own container).
-2. Run `validate-checkpoint <ckpt_dir>` and iterate until there are no hard failures (soft signals are OK if documented).
+1. Follow the path matching your checkpoint type in the SKILL to produce `MODEL_PASSPORT.json`. For OpenPI, this includes runtime enrichment and reference test vector extraction via `--device cuda --reference-dataset-path ...`.
+2. Run `validate-checkpoint <ckpt_dir>` and iterate until there are no hard failures. Do not sign with skipped hard sections — if `reference_test_vector` is missing, fix extraction.
 3. Run `sign-checkpoint <ckpt_dir> --reason '<one-liner if any soft signals>'` to write `SIGNOFF.json`.
-4. From that point on, any consumer (eval harness, robot loader, colleague's repo) can run `validate-checkpoint <ckpt_dir> --require-signoff` as a load-time gate; non-zero exit means do not load this checkpoint.
+4. Run `check-publish-ready <ckpt_dir>` before any HF upload. Upload is blocked unless `README.md`, `TRAINING_LOG.md`, `MODEL_PASSPORT.json`, and `SIGNOFF.json` are present and valid. Use `publish-checkpoint upload/download` — do not write ad hoc upload scripts.
+5. Any consumer can run `validate-checkpoint <ckpt_dir> --require-signoff` as a load-time gate; non-zero exit means do not load.
 
 Do **not** treat passport generation as optional. A checkpoint without a passing signoff has no integrity story — there is nothing to detect a corrupted weight file, a mismatched config, a silent dependency drift between training and inference, or an eval harness silently mis-feeding the model.
 
