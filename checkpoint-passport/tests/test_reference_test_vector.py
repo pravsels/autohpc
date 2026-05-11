@@ -26,6 +26,7 @@ import pytest
 from checkpoint_passport.passport_seed import validate_seed, ALLOWED_SEED_SECTIONS
 from checkpoint_passport.runtime_extractors.openpi import OpenPIExtractor
 from checkpoint_passport.runtime_adapters.base import RuntimeAdapter
+from checkpoint_passport.runtime_adapters.openpi import OpenPIRuntimeAdapter
 
 
 # ── Fake OpenPI module tree ─────────────────────────────────────────────
@@ -192,11 +193,86 @@ def _make_fake_dataset(tmp_path: Path) -> Path:
     return ds
 
 
+def _install_fake_robocandywrapper(monkeypatch, samples, *, error: Exception | None = None):
+    """Install a minimal robocandywrapper module for adapter unit tests."""
+    fake_module = types.ModuleType("robocandywrapper")
+    calls = []
+
+    class FakeRoboCandyDataset:
+        def __len__(self):
+            return len(samples)
+
+        def __getitem__(self, index):
+            return samples[index]
+
+    def make_dataset_without_config(repo_ids):
+        calls.append(repo_ids)
+        if error is not None:
+            raise error
+        return FakeRoboCandyDataset()
+
+    fake_module.make_dataset_without_config = make_dataset_without_config
+    monkeypatch.setitem(sys.modules, "robocandywrapper", fake_module)
+    return calls
+
+
+def _fake_robocandy_sample(frame: int) -> Dict[str, Any]:
+    return {
+        "observation.state.pos": np.array([frame, frame + 1], dtype=np.float32),
+        "observation.state.eef_pose": np.array([frame + 2], dtype=np.float32),
+        "observation.images.front": np.full((4, 5, 3), frame, dtype=np.uint8),
+        "language_instruction": "build the block tower",
+    }
+
+
 # ── 1. reference_test_vector is an allowed seed section ─────────────────
 
 
 def test_reference_test_vector_in_allowed_sections():
     assert "reference_test_vector" in ALLOWED_SEED_SECTIONS
+
+
+def test_runtime_adapter_uses_robocandywrapper_for_reference_sample(tmp_path, monkeypatch):
+    samples = [_fake_robocandy_sample(i) for i in range(4)]
+    calls = _install_fake_robocandywrapper(monkeypatch, samples)
+
+    adapter = OpenPIRuntimeAdapter()
+    adapter._default_prompt = "fallback prompt"
+    result = adapter.extract_reference_sample(
+        tmp_path / "mixed_lerobot_dataset",
+        episode_index=0,
+        start_frame=1,
+        num_frames=2,
+    )
+
+    assert calls == [[str(tmp_path / "mixed_lerobot_dataset")]]
+    np.testing.assert_array_equal(
+        result["states"],
+        np.array([[3, 1, 2], [4, 2, 3]], dtype=np.float32),
+    )
+    assert list(result["images"]) == ["front"]
+    assert len(result["images"]["front"]) == 2
+    assert result["prompt"] == "build the block tower"
+    assert result["episode_index"] == 0
+    assert result["start_frame"] == 1
+    assert result["num_frames"] == 2
+
+
+def test_runtime_adapter_reports_robocandywrapper_load_errors(tmp_path, monkeypatch):
+    _install_fake_robocandywrapper(
+        monkeypatch,
+        [],
+        error=RuntimeError("hub revision v3.0 not found"),
+    )
+
+    adapter = OpenPIRuntimeAdapter()
+    with pytest.raises(ValueError, match="RoboCandyWrapper.*mixed_lerobot_dataset.*v3.0"):
+        adapter.extract_reference_sample(
+            tmp_path / "mixed_lerobot_dataset",
+            episode_index=3,
+            start_frame=5,
+            num_frames=10,
+        )
 
 
 # ── 2. Extraction writes reference_test_vector to seed ──────────────────

@@ -10,11 +10,10 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [{name = "alpha-robotics"}]
-# Intentionally torch-free.  Loading the model class for `model_identity_resolvable`
-# happens by importlib in the validator; the consumer's environment supplies
-# torch + the model package.  This package only depends on stdlib + safetensors
-# for header reads.
+# RoboCandyWrapper is a normal dependency because OpenPI reference extraction
+# must handle mixed LeRobot dataset versions through the sanctioned workflow.
 dependencies = [
+  "robocandywrapper>=0.2.14",
   "safetensors>=0.4",
 ]
 

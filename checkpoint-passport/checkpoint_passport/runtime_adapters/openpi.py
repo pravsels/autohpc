@@ -243,19 +243,21 @@ class OpenPIRuntimeAdapter(RuntimeAdapter):
         import numpy as np
 
         try:
-            from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
-        except ImportError:
+            from robocandywrapper import make_dataset_without_config
+        except ImportError as exc:
             raise ValueError(
-                "lerobot is required for reference sample extraction. "
-                "Install it in the target environment."
-            )
+                "RoboCandyWrapper is required for reference sample extraction. "
+                "Install checkpoint-passport with its declared dependencies."
+            ) from exc
 
-        ds = LeRobotDataset(str(dataset_path))
-
-        ep_indices = [
-            i for i, ep in enumerate(ds.episodes)
-            if ep["episode_index"] == episode_index
-        ] if hasattr(ds, "episodes") else []
+        try:
+            ds = make_dataset_without_config([str(dataset_path)])
+        except Exception as exc:
+            raise ValueError(
+                "RoboCandyWrapper could not load reference dataset "
+                f"{dataset_path} for episode {episode_index}, "
+                f"frames {start_frame}:{start_frame + num_frames}: {exc}"
+            ) from exc
 
         frame_indices = list(range(start_frame, start_frame + num_frames))
 
