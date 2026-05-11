@@ -2,9 +2,9 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Ship the smallest checkpoint-passport rewrite that prevents agents from inventing config/runtime scripts, makes static generation deterministic, supports the known OpenPI pain case, and blocks incomplete HF uploads.
+**Goal:** Ship the smallest checkpoint-passport rewrite that prevents agents from inventing config/runtime scripts, keeps static generation deterministic for config-bearing checkpoints, supports the known OpenPI pain case through a runtime passport seed extractor, and blocks incomplete HF uploads.
 
-**Architecture:** This plan is the source of truth for the MVP. The MVP path is: explicit static generation -> OpenPI config materializer -> OpenPI runtime extractor -> merge -> validate/sign -> publish gate -> updated `SKILL.md`.
+**Architecture:** This plan is the source of truth for the MVP. There are two valid passport creation paths. Config-bearing checkpoints use `generate-passport --config ...` for deterministic static generation. OpenPI checkpoints use `extract-passport-seed openpi ...` followed by `assemble-passport ...` because their inference contract is constructed at runtime by the OpenPI data/model pipeline, not stored in a static `config.json`. Both paths end in the same validate/sign/publish gate.
 
 **Tech Stack:** Python 3.10+, existing `checkpoint_passport` package, `argparse`, `dataclasses`, `json`, `pytest`. Runtime dependencies such as OpenPI and torch are supplied by the target model environment, not by AutoHPC core.
 
@@ -18,6 +18,7 @@
 - Do not vendor OpenPI, LeRobot, torch, transformers, or missiontracker into AutoHPC.
 - If an architecture is unsupported, fail fast with a stop-and-ask message.
 - If `README.md` or `TRAINING_LOG.md` is missing, HF upload is blocked.
+- Do not pretend OpenPI has a passport-compatible static config. Its input/output contract must come from its runtime pipeline.
 
 ## Task 1: Make Static Generation Deterministic [DONE]
 
@@ -85,22 +86,47 @@ uv run pytest tests/test_generate_determinism.py -q
 
 Expected: pass.
 
-## Task 2: Add OpenPI Config Materializer [TODO]
+## Task 2: Replace OpenPI Materializer With Runtime Passport Seed [DONE]
 
 **Files:**
-- Create: `checkpoint-passport/checkpoint_passport/config_materializers.py`
-- Create: `checkpoint-passport/checkpoint_passport/cli/materialize_config.py`
+- Delete or repurpose: `checkpoint-passport/checkpoint_passport/config_materializers.py`
+- Delete or repurpose: `checkpoint-passport/checkpoint_passport/cli/materialize_config.py`
+- Delete or rewrite: `checkpoint-passport/tests/test_materialize_config.py`
+- Create: `checkpoint-passport/checkpoint_passport/passport_seed.py`
+- Create: `checkpoint-passport/checkpoint_passport/runtime_extractors/__init__.py`
+- Create: `checkpoint-passport/checkpoint_passport/runtime_extractors/base.py`
+- Create: `checkpoint-passport/checkpoint_passport/runtime_extractors/openpi.py`
+- Create: `checkpoint-passport/checkpoint_passport/cli/extract_passport_seed.py`
 - Modify: `checkpoint-passport/pyproject.toml`
-- Create: `checkpoint-passport/tests/test_materialize_config.py`
+- Create: `checkpoint-passport/tests/test_passport_seed.py`
+- Create: `checkpoint-passport/tests/test_openpi_seed_extractor.py`
 
-**Step 1: Add CLI contract**
+**Step 1: State the corrected boundary**
+
+OpenPI does not have a passport-compatible static config. A flat dict with
+`policy_type`, `action_dim`, `action_horizon`, and `default_prompt` is not
+enough for `generate-passport`, because the passport needs `input_features`,
+`output_features`, norm behavior, action semantics, and transform behavior.
+
+Those are constructed by the OpenPI runtime pipeline:
+
+- OpenPI config registry lookup
+- `cfg.data.create(...)`
+- input/output transforms
+- checkpoint `assets/` norm stats
+- adapter loading/inference behavior
+
+Therefore the OpenPI path should emit a **passport seed**, not a fake
+`config.json`.
+
+**Step 2: Add CLI contract**
 
 Implement:
 
 ```bash
-materialize-passport-config openpi \
+extract-passport-seed openpi \
   --checkpoint-dir <ckpt> \
-  --out <ckpt>/passport_config.json \
+  --out <ckpt>/PASSPORT_SEED.json \
   --openpi-config-name <name> \
   --default-prompt <prompt> \
   --resize-size 224
@@ -108,41 +134,50 @@ materialize-passport-config openpi \
 
 Unknown architectures fail fast and list supported options. Missing OpenPI args fail fast.
 
-**Step 2: Keep dependencies external**
+**Step 3: Keep dependencies external**
 
-OpenPI materialization must run in an OpenPI-capable environment. If imports fail, print:
+OpenPI seed extraction must run in an OpenPI-capable environment. If imports fail, print:
 
 ```text
-OpenPI materialization must run inside the OpenPI runtime environment.
+OpenPI seed extraction must run inside the OpenPI runtime environment.
 Missing import: <module>. Activate the target environment or container and rerun.
 ```
 
 Do not search the filesystem for alternate loader code. If local reference paths such as `../alpha-robotics/...` are absent, stop and ask.
 
-**Step 3: Emit passport-facing config**
+**Step 4: Emit passport seed sections**
 
-Extract what is available from OpenPI config/runtime:
+The seed may include sections normally produced statically for config-bearing
+checkpoints, because OpenPI's contract is runtime-constructed. Emit only fields
+the extractor actually obtains from the runtime pipeline:
 
-- policy type / architecture
-- config name
-- default prompt
-- action horizon
-- action dimension if available
-- image keys and resize size if available
-- `use_delta_actions` if available
-- checkpoint format: `model.safetensors` or Orbax `params`
+- `stack`
+- `input_contract`
+- `output_spec`
+- `model_identity`
+- `model_internals`
+- optional `transform_pipeline` entries if directly available from transforms
+- extractor metadata
 
-Do not guess missing fields. Leave unknowns unset/null.
+Do not use model token dimensions as robot-facing action dimensions unless the
+adapter/runtime confirms that they are the actual robot action dimensions. Do
+not guess image keys, state keys, delta semantics, or resize behavior.
 
-**Step 4: Register script**
+**Step 5: Register script**
 
 Add:
+
+```toml
+extract-passport-seed = "checkpoint_passport.cli.extract_passport_seed:main"
+```
+
+Remove the stale materializer entry if present:
 
 ```toml
 materialize-passport-config = "checkpoint_passport.cli.materialize_config:main"
 ```
 
-**Step 5: Test**
+**Step 6: Test**
 
 Use monkeypatch/fake modules. Do not require real OpenPI in unit tests.
 
@@ -150,64 +185,69 @@ Run:
 
 ```bash
 cd checkpoint-passport
-uv run pytest tests/test_materialize_config.py -q
+uv run pytest tests/test_passport_seed.py tests/test_openpi_seed_extractor.py -q
 ```
 
 Expected: pass.
 
-## Task 3: Add Minimal Runtime Fragment And Merge [TODO]
+## Task 3: Add Passport Seed Assembly [TODO]
 
 **Files:**
-- Create: `checkpoint-passport/checkpoint_passport/runtime_fragment.py`
-- Create: `checkpoint-passport/checkpoint_passport/merge_runtime.py`
-- Create: `checkpoint-passport/checkpoint_passport/cli/merge_runtime.py`
+- Create: `checkpoint-passport/checkpoint_passport/assemble_passport.py`
+- Create: `checkpoint-passport/checkpoint_passport/cli/assemble_passport.py`
 - Modify: `checkpoint-passport/pyproject.toml`
-- Create: `checkpoint-passport/tests/test_runtime_fragment.py`
-- Create: `checkpoint-passport/tests/test_merge_runtime.py`
+- Create: `checkpoint-passport/tests/test_assemble_passport.py`
 
-**Step 1: Define minimal runtime fragment**
+**Step 1: Define passport seed**
 
-For MVP, include only:
+A passport seed is the partially assembled content emitted by
+`extract-passport-seed openpi` for OpenPI checkpoints.
 
-- extractor metadata
+The seed may include:
+
+- `stack`
+- `input_contract`
+- `output_spec`
 - `model_identity`
 - `model_internals`
-- `output_spec.smoke_results`
+- `transform_pipeline`
 
-Forbid runtime fragments from containing:
+The canonical assembler owns:
 
-- `input_contract`
+- `schema_version`
+- `generated_at`
+- `generated_by`
 - `weight_integrity`
 - `provenance`
+- final JSON pruning/ordering
 
-Unknown top-level keys fail validation.
+Unknown top-level seed keys fail validation.
 
-**Step 2: Validate inside merge**
+**Step 2: Add assembler CLI**
 
-Do not add a standalone `validate-passport-runtime` CLI in the MVP unless truly needed. `merge-passport-runtime` should load and validate the runtime fragment before merging.
-
-**Step 3: Implement simple merge v1**
-
-Rules:
-
-- Protected static sections are never overwritten: `schema_version`, `generated_by`, `generated_at`, `weight_integrity`, `provenance`.
-- Runtime fills missing/null runtime-owned fields.
-- If runtime tries to change a non-null static value, exit non-zero and report the JSON path.
-- Output JSON should be stable enough that repeated merges produce byte-identical output.
-
-**Step 4: Add CLI**
+Implement:
 
 ```bash
-merge-passport-runtime \
-  --passport <ckpt>/MODEL_PASSPORT.json \
-  --runtime <ckpt>/PASSPORT_RUNTIME.json \
+assemble-passport \
+  --checkpoint-dir <ckpt> \
+  --seed <ckpt>/PASSPORT_SEED.json \
   --out <ckpt>/MODEL_PASSPORT.json
 ```
 
-Register:
+The assembler should hash checkpoint files, populate provenance, attach
+generated metadata, and write the final `MODEL_PASSPORT.json`.
+
+**Step 3: Preserve static generator path**
+
+For config-bearing checkpoints, `generate-passport` continues to write
+`MODEL_PASSPORT.json` directly. Do not refactor it into the seed path in the
+MVP. `assemble-passport` exists for seed-producing runtime extractors such as
+OpenPI.
+
+**Step 4: Register script**
 
 ```toml
-merge-passport-runtime = "checkpoint_passport.cli.merge_runtime:main"
+assemble-passport = "checkpoint_passport.cli.assemble_passport:main"
 ```
 
 **Step 5: Test**
@@ -216,39 +256,30 @@ Run:
 
 ```bash
 cd checkpoint-passport
-uv run pytest tests/test_runtime_fragment.py tests/test_merge_runtime.py -q
+uv run pytest tests/test_assemble_passport.py -q
 ```
 
 Expected: pass.
 
-## Task 4: Add OpenPI Runtime Extractor [TODO]
+## Task 4: Add OpenPI Smoke/Runtime Enrichment [TODO]
 
 **Files:**
-- Create: `checkpoint-passport/checkpoint_passport/runtime_extractors/__init__.py`
-- Create: `checkpoint-passport/checkpoint_passport/runtime_extractors/base.py`
-- Create: `checkpoint-passport/checkpoint_passport/runtime_extractors/openpi.py`
-- Create: `checkpoint-passport/checkpoint_passport/cli/extract_runtime.py`
-- Modify: `checkpoint-passport/pyproject.toml`
-- Create: `checkpoint-passport/tests/test_extract_runtime_cli.py`
+- Modify: `checkpoint-passport/checkpoint_passport/runtime_extractors/openpi.py`
 - Create: `checkpoint-passport/tests/test_openpi_extractor.py`
 
-**Step 1: Add extractor CLI**
+**Step 1: Extend the OpenPI seed extractor**
+
+Use the same `extract-passport-seed openpi` CLI from Task 2. This task adds
+runtime enrichment beyond static-ish contract extraction:
 
 ```bash
-extract-passport-runtime openpi \
+extract-passport-seed openpi \
   --checkpoint-dir <ckpt> \
-  --passport <ckpt>/MODEL_PASSPORT.json \
-  --out <ckpt>/PASSPORT_RUNTIME.json \
+  --out <ckpt>/PASSPORT_SEED.json \
   --device cuda \
   --openpi-config-name <name> \
   --default-prompt <prompt> \
   --resize-size 224
-```
-
-Register:
-
-```toml
-extract-passport-runtime = "checkpoint_passport.cli.extract_runtime:main"
 ```
 
 **Step 2: Fail fast for unsupported architectures**
@@ -279,7 +310,7 @@ adapter = policy_info.adapter
 
 If `missiontracker` or OpenPI imports fail, print a clear missing-runtime error and stop. Do not inspect unrelated deployment code.
 
-**Step 4: Emit minimal runtime fragment**
+**Step 4: Emit runtime enrichment**
 
 Populate what can be safely extracted:
 
@@ -299,7 +330,7 @@ Run:
 
 ```bash
 cd checkpoint-passport
-uv run pytest tests/test_extract_runtime_cli.py tests/test_openpi_extractor.py -q
+uv run pytest tests/test_openpi_seed_extractor.py tests/test_openpi_extractor.py -q
 ```
 
 Expected: pass.
@@ -375,9 +406,9 @@ Expected: pass.
 New flow:
 
 1. Materialize config when needed.
-2. Generate static passport deterministically.
-3. Run runtime extractor.
-4. Merge runtime fragment.
+2. For config-bearing checkpoints, generate static passport deterministically.
+3. For OpenPI checkpoints, run `extract-passport-seed openpi`.
+4. Assemble `MODEL_PASSPORT.json` from the OpenPI seed.
 5. Validate.
 6. Sign.
 7. Check publish readiness before HF upload.
@@ -396,11 +427,11 @@ Remove or replace instructions to:
 
 Agents stop when:
 
-- no config and no materializer exists
+- a config-bearing checkpoint has no explicit config path
 - architecture is unsupported
 - OpenPI runtime imports are missing
 - required extractor args are missing
-- runtime fragment validation/merge fails
+- passport seed validation/assembly fails
 - publish gate fails
 
 **Step 4: Keep README short**
@@ -418,10 +449,9 @@ Run:
 cd checkpoint-passport
 uv run pytest \
   tests/test_generate_determinism.py \
-  tests/test_materialize_config.py \
-  tests/test_runtime_fragment.py \
-  tests/test_merge_runtime.py \
-  tests/test_extract_runtime_cli.py \
+  tests/test_passport_seed.py \
+  tests/test_openpi_seed_extractor.py \
+  tests/test_assemble_passport.py \
   tests/test_openpi_extractor.py \
   tests/test_publish_ready.py \
   -q
@@ -448,6 +478,9 @@ Do not implement these until the MVP passes:
 - Standalone `validate-passport-runtime` CLI.
 - Full transform pipeline / norm round-trip runtime fragment sections.
 - Full field-level merge policy table.
+- Separate `materialize-passport-config` CLI, unless another architecture truly
+  has a static framework config that can be materialized without runtime
+  pipeline construction.
 - Real local checkpoint integration harness.
 - Hermes acceptance scorecard.
 - Extensive README/root README rewrites.
@@ -458,9 +491,9 @@ MVP is complete when:
 
 - `generate-passport` can run deterministically with explicit inputs.
 - HF network resolution is opt-in only.
-- OpenPI checkpoints without `config.json` have a documented materializer path.
-- OpenPI runtime extraction is a documented command, not agent discovery.
-- Runtime data is merged by `merge-passport-runtime`, not ad hoc scripts.
+- OpenPI checkpoints without `config.json` have a documented passport seed extractor path.
+- OpenPI runtime extraction is a documented command that emits passport seed sections, not agent discovery.
+- `MODEL_PASSPORT.json` is assembled by `assemble-passport`, not ad hoc scripts.
 - `checkpoint-passport/SKILL.md` no longer contains loose Phase 2 instructions.
 - HF upload is blocked unless `README.md`, `TRAINING_LOG.md`, `MODEL_PASSPORT.json`, and `SIGNOFF.json` are present and valid.
 - Focused MVP tests pass.
