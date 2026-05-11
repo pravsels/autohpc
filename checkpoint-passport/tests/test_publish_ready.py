@@ -18,11 +18,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from unittest.mock import patch, MagicMock
+import sys
 
 import pytest
 
 from checkpoint_passport.cli.check_publish_ready import (
     check_publish_ready,
+    main as check_publish_ready_main,
     PublishReadyResult,
 )
 from checkpoint_passport.cli.publish_checkpoint import (
@@ -75,6 +77,64 @@ def test_ready_checkpoint_passes(tmp_path):
     assert result.ready is True
     assert result.packaging_errors == []
     assert result.validation_errors == []
+
+
+def test_check_publish_ready_forwards_target_repo(tmp_path):
+    ckpt = _make_ready_checkpoint(tmp_path)
+    target_repo = tmp_path / "deploy"
+    target_repo.mkdir()
+
+    mock_result = MagicMock()
+    mock_result.has_failures = False
+    mock_result.observations = []
+
+    with patch(
+        "checkpoint_passport.cli.check_publish_ready.self_validate_passport",
+        return_value=mock_result,
+    ) as mock_validate:
+        result = check_publish_ready(ckpt, target_repo=target_repo)
+
+    assert result.ready is True
+    mock_validate.assert_called_once_with(
+        ckpt,
+        require_signoff=True,
+        target_repo=target_repo,
+    )
+
+
+def test_check_publish_ready_cli_accepts_target_repo(tmp_path, monkeypatch, capsys):
+    ckpt = _make_ready_checkpoint(tmp_path)
+    target_repo = tmp_path / "deploy"
+    target_repo.mkdir()
+
+    mock_result = MagicMock()
+    mock_result.has_failures = False
+    mock_result.observations = []
+
+    with patch(
+        "checkpoint_passport.cli.check_publish_ready.self_validate_passport",
+        return_value=mock_result,
+    ) as mock_validate:
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "check-publish-ready",
+                str(ckpt),
+                "--target-repo",
+                str(target_repo),
+            ],
+        )
+        with pytest.raises(SystemExit) as exc:
+            check_publish_ready_main()
+
+    assert exc.value.code == 0
+    assert "ready:" in capsys.readouterr().out
+    mock_validate.assert_called_once_with(
+        ckpt,
+        require_signoff=True,
+        target_repo=target_repo,
+    )
 
 
 # ── 2. Missing required files ────────────────────────────────────────────

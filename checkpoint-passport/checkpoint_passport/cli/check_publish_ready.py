@@ -12,6 +12,7 @@ separately from validation errors (passport/signoff integrity failures).
 
 Usage:
     check-publish-ready <checkpoint_dir>
+    check-publish-ready <checkpoint_dir> --target-repo /path/to/deploy/repo
     check-publish-ready <checkpoint_dir> --json
 
 Exit code 0 = ready to publish.  Exit code 1 = not ready.
@@ -65,7 +66,11 @@ class PublishReadyResult:
         }
 
 
-def check_publish_ready(checkpoint_dir: str | Path) -> PublishReadyResult:
+def check_publish_ready(
+    checkpoint_dir: str | Path,
+    *,
+    target_repo: str | Path | None = None,
+) -> PublishReadyResult:
     """Check whether a checkpoint directory is ready for HF upload.
 
     Returns a PublishReadyResult with all discovered errors, split into
@@ -132,7 +137,11 @@ def check_publish_ready(checkpoint_dir: str | Path) -> PublishReadyResult:
     )
     if can_validate:
         try:
-            result = self_validate_passport(ckpt, require_signoff=True)
+            result = self_validate_passport(
+                ckpt,
+                require_signoff=True,
+                target_repo=target_repo,
+            )
             for obs in result.observations:
                 if obs.status is Status.FAIL:
                     validation.append(f"{obs.check}: {obs.message}")
@@ -159,9 +168,16 @@ def main() -> None:
         "--json", action="store_true", dest="json_output",
         help="output structured JSON instead of human-readable report",
     )
+    parser.add_argument(
+        "--target-repo", type=Path, default=None,
+        help="deployment target repo; enables deployment_repo_commit check",
+    )
     args = parser.parse_args()
 
-    result = check_publish_ready(args.checkpoint_dir)
+    result = check_publish_ready(
+        args.checkpoint_dir,
+        target_repo=args.target_repo,
+    )
 
     if args.json_output:
         print(json.dumps(result.to_dict(), indent=2))
