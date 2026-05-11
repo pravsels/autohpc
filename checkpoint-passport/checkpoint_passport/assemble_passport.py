@@ -41,6 +41,8 @@ def assemble_passport(
     generated_at: Optional[str] = None,
     target_repo: Optional[Path] = None,
     training_repo: Optional[Path] = None,
+    extra_skip_files: Optional[list[str]] = None,
+    extra_skip_dirs: Optional[list[str]] = None,
 ) -> Dict[str, Any]:
     """Build a complete passport dict from a validated seed + checkpoint files.
 
@@ -50,6 +52,8 @@ def assemble_passport(
         generated_at:   ISO 8601 timestamp; None = use current UTC time.
         target_repo:    deployment repo — dirty tree is a hard error.
         training_repo:  training repo — populates provenance commits.
+        extra_skip_files: filenames to exclude from weight_integrity hashing.
+        extra_skip_dirs:  top-level directory names to exclude from hashing.
 
     Returns:
         Complete passport dict ready for JSON serialization.
@@ -76,7 +80,11 @@ def assemble_passport(
         if section in seed:
             passport[section] = seed[section]
 
-    files_to_hash = _hashable_files(ckpt)
+    files_to_hash = _hashable_files(
+        ckpt,
+        extra_skip_files=extra_skip_files,
+        extra_skip_dirs=extra_skip_dirs,
+    )
     weight_files = []
     for f in files_to_hash:
         weight_files.append({

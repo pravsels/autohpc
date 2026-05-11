@@ -154,22 +154,42 @@ def _parse_wandb_url(log_path: Path) -> Optional[str]:
         return None
 
 
-def _hashable_files(ckpt: Path) -> List[Path]:
+DEFAULT_SKIP_FILES = frozenset({
+    "MODEL_PASSPORT.json", "PASSPORT_SEED.json", "SIGNOFF.json",
+    "README.md", "TRAINING_LOG.md",
+})
+
+DEFAULT_SKIP_DIRS: frozenset[str] = frozenset()
+
+
+def _hashable_files(
+    ckpt: Path,
+    *,
+    extra_skip_files: Optional[List[str]] = None,
+    extra_skip_dirs: Optional[List[str]] = None,
+) -> List[Path]:
     """Find all files that should be hashed for weight_integrity.
 
     Includes weight files, config.json, and norm stats — everything
-    needed for inference. Excludes README, TRAINING_LOG, passport/signoff,
-    and hidden files.
+    needed for inference. Excludes hidden files, workflow artifacts
+    (passport, signoff, README, training log), and any caller-specified
+    files or top-level directories.
     """
-    skip = {"MODEL_PASSPORT.json", "PASSPORT_SEED.json", "SIGNOFF.json", "README.md", "TRAINING_LOG.md"}
+    skip_files = DEFAULT_SKIP_FILES | set(extra_skip_files or [])
+    skip_dirs = DEFAULT_SKIP_DIRS | set(extra_skip_dirs or [])
+
     files = []
     for p in sorted(ckpt.rglob("*")):
         if not p.is_file():
             continue
         if p.name.startswith("."):
             continue
-        if p.name in skip:
+        if p.name in skip_files:
             continue
+        if skip_dirs:
+            rel = p.relative_to(ckpt)
+            if rel.parts[0] in skip_dirs:
+                continue
         files.append(p)
     return files
 
@@ -587,6 +607,8 @@ def generate_passport(
     training_repo: Optional[Path] = None,
     dataset_repos: Optional[List[str]] = None,
     loader_classes: Optional[List[str]] = None,
+    extra_skip_files: Optional[List[str]] = None,
+    extra_skip_dirs: Optional[List[str]] = None,
 ) -> ModelPassport:
     """Build a ModelPassport from checkpoint files on disk.
 
@@ -602,6 +624,8 @@ def generate_passport(
         dataset_repos:  list of 'repo[@commit][:loader]' specs.
         loader_classes: parallel list of loader classes (prefer the
                         ':loader' syntax in dataset_repos).
+        extra_skip_files: filenames to exclude from weight_integrity hashing.
+        extra_skip_dirs:  top-level directory names to exclude from hashing.
 
     Returns:
         A fully populated ModelPassport (Phase 1 fields filled, Phase 2
@@ -676,7 +700,11 @@ def generate_passport(
     )
 
     # -- weight_integrity --
-    files_to_hash = _hashable_files(ckpt)
+    files_to_hash = _hashable_files(
+        ckpt,
+        extra_skip_files=extra_skip_files,
+        extra_skip_dirs=extra_skip_dirs,
+    )
     weight_files = []
     for f in files_to_hash:
         weight_files.append(WeightFileEntry(
@@ -775,6 +803,16 @@ def main() -> None:
              "user/dataset@abc123:lerobot.datasets.LeRobotDataset",
     )
     parser.add_argument(
+        "--skip-dir", type=str, action="append", default=None, dest="skip_dirs",
+        help="top-level directory to exclude from weight_integrity hashing "
+             "(repeatable, e.g. --skip-dir retain)",
+    )
+    parser.add_argument(
+        "--skip-file", type=str, action="append", default=None, dest="skip_files",
+        help="filename to exclude from weight_integrity hashing "
+             "(repeatable, e.g. --skip-file wandb_run.json)",
+    )
+    parser.add_argument(
         "--out", type=Path, default=None,
         help="output path (default: <checkpoint_dir>/MODEL_PASSPORT.json)",
     )
@@ -801,6 +839,8 @@ def main() -> None:
             training_repo=args.training_repo,
             dataset_repos=dataset_repos or None,
             loader_classes=loader_classes or None,
+            extra_skip_files=args.skip_files,
+            extra_skip_dirs=args.skip_dirs,
         )
     except (ValueError, FileNotFoundError) as exc:
         print(f"error: {exc}", file=sys.stderr)

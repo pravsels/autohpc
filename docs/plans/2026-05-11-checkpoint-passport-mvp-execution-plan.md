@@ -280,98 +280,31 @@ uv run pytest tests/test_assemble_passport.py -q
 
 Expected: pass.
 
-## Task 4: Add OpenPI Smoke/Runtime Enrichment [TODO]
+## Task 4: Add OpenPI Smoke/Runtime Enrichment [DONE]
+
+**Post-implementation notes:**
+- Added `--device` CLI argument to `extract-passport-seed openpi`. When provided, loads the model and collects runtime enrichment (library versions, parameter summary, smoke inference). Without `--device`, only config-level extraction is performed.
+- **Replaced missiontracker cross-repo dependency with self-contained RuntimeAdapter protocol.** The initial implementation used `missiontracker.adapters.factory` from the `alpha-robotics` repo, which dragged in deployment/eval machinery (ACTAdapter, LeRobot, PolicyObservation, etc.) that enrichment doesn't need. This was refactored into an internal protocol.
+- New `runtime_adapters/` package with `RuntimeAdapter` ABC (4 methods: `load`, `count_parameters`, `smoke_inference`, `library_versions`) and `OpenPIRuntimeAdapter` implementation using only `openpi.*` APIs.
+- `OpenPIRuntimeAdapter.load()` inlines the ~25 lines from missiontracker's `_create_trained_policy_local` — `restore_params` → `Policy` constructor with transforms. Only non-trivial part.
+- `smoke_inference()` constructs an OpenPI-native dict directly (numpy arrays, no `PolicyObservation`, no torch tensors) and calls `policy.infer()`. The raw action dim for observations is derived from the data config's output transforms (e.g. 7 for joints-only), not `cfg.model.action_dim` (32, the tokenized dim).
+- `count_parameters()` uses `flax.nnx.state(model)` + `jax.tree.leaves()` for JAX models, with PyTorch fallback.
+- Deleted from `runtime_extractors/openpi.py`: `_import_missiontracker()`, `_build_dummy_observation()`, `_count_parameters()`, `_run_smoke_test()`, `_collect_library_versions()` — all replaced by protocol methods.
+- Tests use a clean `FakeRuntimeAdapter` implementing the 4 protocol methods — no more sys.modules hacking for missiontracker fakes. 11 tests covering enrichment, smoke failure recording, missing params/smoke, JSON serialization, validation, and CLI wiring.
+- Real checkpoint verification (`pi05-build-block-tower-baseline-6mix-joints-only`, `--device cuda`): 3,353,433,872 params (3.35B), smoke pass (7.7s), library versions (Python 3.11.14, torch 2.11.0+cu128, jax 0.5.3).
+- Also added `--skip-file` and `--skip-dir` CLI arguments to `generate-passport` and `assemble-passport` to exclude training artifacts (e.g. `retain/`) from `weight_integrity` hashing.
 
 **Files:**
+- Create: `checkpoint-passport/checkpoint_passport/runtime_adapters/__init__.py`
+- Create: `checkpoint-passport/checkpoint_passport/runtime_adapters/base.py`
+- Create: `checkpoint-passport/checkpoint_passport/runtime_adapters/openpi.py`
 - Modify: `checkpoint-passport/checkpoint_passport/runtime_extractors/openpi.py`
+- Modify: `checkpoint-passport/checkpoint_passport/runtime_extractors/base.py`
+- Modify: `checkpoint-passport/checkpoint_passport/cli/extract_passport_seed.py`
+- Modify: `checkpoint-passport/checkpoint_passport/cli/generate.py`
+- Modify: `checkpoint-passport/checkpoint_passport/cli/assemble_passport.py`
+- Modify: `checkpoint-passport/checkpoint_passport/assemble_passport.py`
 - Create: `checkpoint-passport/tests/test_openpi_extractor.py`
-
-**Step 1: Extend the OpenPI seed extractor**
-
-Use the same `extract-passport-seed openpi` CLI from Task 2. This task adds
-runtime enrichment beyond static-ish contract extraction:
-
-```bash
-extract-passport-seed openpi \
-  --checkpoint-dir <ckpt> \
-  --out <ckpt>/PASSPORT_SEED.json \
-  --device cuda \
-  --openpi-config-name <name> \
-  --default-prompt <prompt> \
-  --resize-size 224
-```
-
-**Step 2: Fail fast for unsupported architectures**
-
-Every unsupported architecture exits non-zero with:
-
-```text
-extractor not implemented for architecture <name>; stop and ask
-```
-
-Do not register `lerobot` or generic HF extractors in the MVP unless they have tests and working implementations.
-
-**Step 3: Use the known OpenPI adapter path**
-
-`missiontracker` is the alpha-robotics deployment/eval package. It lives at
-`/home/praveen/Desktop/code/alpha-robotics/missiontracker/` and is installed
-in the `alpha-robotics` conda env (`/home/praveen/miniconda3/envs/alpha-robotics`).
-OpenPI is also installed in that env.
-
-The adapter factory is at `missiontracker.adapters.factory`:
-
-```python
-from missiontracker.adapters.factory import load_policy_adapter, PolicyInfo
-
-policy_info: PolicyInfo = load_policy_adapter(
-    checkpoint_dir,
-    device=device,
-    force_architecture="openpi",
-    openpi_config_name=config_name,
-    default_prompt=default_prompt,
-    resize_size=resize_size,
-)
-adapter = policy_info.adapter
-```
-
-`PolicyInfo` is a dataclass with fields: `adapter`, `architecture`,
-`has_reward`, `action_dim`, `action_horizon`, `train_stats`, `metadata`.
-
-If `missiontracker` or OpenPI imports fail, print a clear missing-runtime error and stop. Do not inspect unrelated deployment code.
-
-To run commands in the correct env, use:
-`/home/praveen/miniconda3/envs/alpha-robotics/bin/python` or activate with
-`conda activate alpha-robotics`.
-
-**Step 4: Emit runtime enrichment**
-
-Populate what can be safely extracted:
-
-- extractor metadata
-- resolved model class/name if available
-- library versions for Python, torch/OpenPI/JAX if available
-- parameter summary if available
-- numerical health / smoke result if the adapter supports a bounded smoke call
-
-Leave unknown fields unset. Do not guess.
-
-**Step 5: Test**
-
-Use fakes/monkeypatches for missing imports and happy-path shape. Do not require real OpenPI in unit tests.
-
-Run:
-
-```bash
-cd checkpoint-passport
-uv run pytest tests/test_openpi_seed_extractor.py tests/test_openpi_extractor.py -q
-```
-
-Expected: pass.
-
-For real checkpoint testing, use:
-`/home/praveen/Desktop/code/alpha-robotics/checkpoints/pi05-build-block-tower-baseline-6mix-joints-only`
-with config name `pi05_build_block_tower_baseline_6mix_joints_only` and the
-`alpha-robotics` conda env.
 
 ## Task 5: Add Minimal Publish Gate [TODO]
 

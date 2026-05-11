@@ -56,6 +56,16 @@ def main() -> None:
         "--training-repo", type=Path, default=None,
         help="training model repo; populates provenance.training_repo_commit",
     )
+    parser.add_argument(
+        "--skip-dir", type=str, action="append", default=None, dest="skip_dirs",
+        help="top-level directory to exclude from weight_integrity hashing "
+             "(repeatable, e.g. --skip-dir retain)",
+    )
+    parser.add_argument(
+        "--skip-file", type=str, action="append", default=None, dest="skip_files",
+        help="filename to exclude from weight_integrity hashing "
+             "(repeatable, e.g. --skip-file wandb_run.json)",
+    )
     args = parser.parse_args()
 
     if not args.seed.exists():
@@ -75,6 +85,8 @@ def main() -> None:
             generated_at=args.generated_at,
             target_repo=args.target_repo,
             training_repo=args.training_repo,
+            extra_skip_files=args.skip_files,
+            extra_skip_dirs=args.skip_dirs,
         )
     except InvalidSeedError as exc:
         print(f"error: {exc}", file=sys.stderr)

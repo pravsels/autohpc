@@ -52,8 +52,15 @@ class BaseExtractor(abc.ABC):
         config_name: str,
         default_prompt: Optional[str] = None,
         resize_size: Optional[int] = None,
+        device: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Extract a passport seed from a checkpoint.
+
+        When *device* is provided (e.g. ``"cuda"`` or ``"cpu"``), the
+        extractor may load the model via the deployment adapter to
+        collect runtime enrichment: library versions, parameter summary,
+        and numerical health / smoke results.  Without *device*, only
+        config-level extraction is performed (no weight loading).
 
         Returns:
             A dict conforming to the passport seed schema

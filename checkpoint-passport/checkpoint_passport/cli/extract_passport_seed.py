@@ -62,6 +62,12 @@ def main() -> None:
         "--resize-size", type=int, default=None,
         help="image resize dimension (e.g. 224)",
     )
+    parser.add_argument(
+        "--device", type=str, default=None,
+        help="device for runtime enrichment (e.g. cuda, cpu); "
+             "when set, loads model weights to extract library versions, "
+             "parameter summary, and smoke results",
+    )
     args = parser.parse_args()
 
     backend = args.backend.lower()
@@ -89,6 +95,7 @@ def main() -> None:
                 config_name=args.openpi_config_name,
                 default_prompt=args.default_prompt,
                 resize_size=args.resize_size,
+                device=args.device,
             )
 
         validate_seed(seed)

@@ -13,13 +13,15 @@ This extractor:
     4. Emits passport seed sections: stack, input_contract, output_spec,
        model_identity, model_internals (partial).
 
-It does NOT load model weights or require a GPU (that's Task 4 enrichment).
+When --device is provided (runtime enrichment):
+    5. Loads the model via the RuntimeAdapter protocol
+       (checkpoint_passport.runtime_adapters.openpi).
+    6. Collects library versions, parameter count, and smoke results.
 """
 
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -29,7 +31,7 @@ from checkpoint_passport.runtime_extractors.base import (
 )
 
 
-_EXTRACTOR_VERSION = "0.1.0"
+_EXTRACTOR_VERSION = "0.2.0"
 
 
 def _import_openpi_config():
@@ -215,6 +217,45 @@ def _extract_model_internals(cfg: Any) -> Dict[str, Any]:
     return internals
 
 
+def _enrich_with_runtime(
+    seed: Dict[str, Any],
+    checkpoint_dir: Path,
+    *,
+    config_name: str,
+    default_prompt: Optional[str],
+    resize_size: Optional[int],
+    device: str,
+) -> None:
+    """Load the model via the RuntimeAdapter protocol and enrich the seed."""
+    from checkpoint_passport.runtime_adapters.openpi import OpenPIRuntimeAdapter
+
+    adapter = OpenPIRuntimeAdapter()
+    adapter.load(
+        checkpoint_dir,
+        device=device,
+        config_name=config_name,
+        default_prompt=default_prompt,
+        resize_size=resize_size,
+    )
+
+    seed["extractor"]["device"] = device
+
+    lib_versions = adapter.library_versions()
+    if lib_versions:
+        seed.setdefault("model_identity", {})
+        seed["model_identity"]["library_versions"] = lib_versions
+
+    param_summary = adapter.count_parameters()
+    if param_summary is not None:
+        seed.setdefault("model_internals", {})
+        seed["model_internals"]["parameter_summary"] = param_summary
+
+    smoke = adapter.smoke_inference()
+    if smoke is not None:
+        seed.setdefault("model_internals", {})
+        seed["model_internals"]["numerical_health"] = {"smoke": smoke}
+
+
 class OpenPIExtractor(BaseExtractor):
     """Extracts a passport seed from an OpenPI checkpoint."""
 
@@ -225,6 +266,7 @@ class OpenPIExtractor(BaseExtractor):
         config_name: str,
         default_prompt: Optional[str] = None,
         resize_size: Optional[int] = None,
+        device: Optional[str] = None,
     ) -> Dict[str, Any]:
         config_mod = _import_openpi_config()
         cfg = config_mod.get_config(config_name)
@@ -239,8 +281,6 @@ class OpenPIExtractor(BaseExtractor):
                 if assets_dirs is not None and model_config is not None:
                     data_config = data_factory.create(assets_dirs, model_config)
         except Exception:
-            # If pipeline instantiation fails (missing assets, etc.), proceed
-            # with what we can get from config attributes alone.
             pass
 
         norm_stats = _read_norm_stats(checkpoint_dir)
@@ -272,5 +312,15 @@ class OpenPIExtractor(BaseExtractor):
             seed["model_identity"] = model_identity
         if model_internals:
             seed["model_internals"] = model_internals
+
+        if device is not None:
+            _enrich_with_runtime(
+                seed,
+                checkpoint_dir,
+                config_name=config_name,
+                default_prompt=default_prompt,
+                resize_size=resize_size,
+                device=device,
+            )
 
         return seed
