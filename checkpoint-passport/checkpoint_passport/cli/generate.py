@@ -61,7 +61,6 @@ from typing import Any, Dict, List, Optional, Tuple
 from checkpoint_passport.schema import (
     SCHEMA_VERSION,
     ModelPassport,
-    GeneratedBy,
     InputContract,
     ImageSpec,
     StateSpec,
@@ -70,15 +69,11 @@ from checkpoint_passport.schema import (
     LanguageSpec,
     TemporalSpec,
     TrainingDatasetSpec,
-    ModelIdentity,
-    RuntimeConstraints,
     ModelInternals,
     PretrainedAsset,
     ForwardGraph,
     OutputSpec,
-    OutputActions,
     InferenceParameters,
-    PostProcessing,
     WeightIntegrity,
     WeightFileEntry,
     Provenance,
@@ -213,10 +208,7 @@ def _extract_images(config: Dict[str, Any]) -> List[ImageSpec]:
         norm_type = norm_mapping.get("VISUAL")
         norm_info = None
         if norm_type:
-            norm_info = {
-                "type": norm_type,
-                "scope": "VISUAL",
-            }
+            norm_info = {"type": norm_type}
             if backbone:
                 norm_info["applied_by"] = f"observation_encoder.vision ({backbone})"
 
@@ -225,10 +217,6 @@ def _extract_images(config: Dict[str, Any]) -> List[ImageSpec]:
             raw_shape=shape if shape else None,
             encoder_resize=resize,
             crop={"shape": crop} if crop else None,
-            color_order="RGB",
-            channel_layout="CHW" if shape and len(shape) == 3 and shape[0] <= 4 else None,
-            dtype="float32",
-            value_range=[0.0, 1.0],
             normalization=norm_info,
         ))
     return images
@@ -281,8 +269,6 @@ def _extract_state(
             "source": str(stats_path.relative_to(ckpt)) if stats_path else None,
             "stats_dim": total_dim,
         }
-        if stats_path:
-            norm_info["stats_fingerprint"] = {"file_sha256": _sha256(stats_path)}
 
     return StateSpec(
         total_dim=total_dim,
@@ -324,12 +310,12 @@ def _extract_actions(
             "convert_rotation": entry.get("convert_rotation", False),
         })
 
-    # norm_mask and delta_dims from stats
+    # norm_mask (only stored when non-uniform) and delta_dims from stats
     norm_mask = None
     delta_dims = None
     if stats:
         nm = stats.get("norm_mask")
-        if nm:
+        if nm and not all(nm):
             norm_mask = nm
 
         if rot6d_slice and total_dim:
@@ -362,8 +348,6 @@ def _extract_actions(
         }
         if layout:
             norm_info["stats_layout"] = layout
-        if stats_path:
-            norm_info["stats_fingerprint"] = {"file_sha256": _sha256(stats_path)}
 
     return ActionSpec(
         total_dim=total_dim,
@@ -411,13 +395,6 @@ def _extract_inference_params(config: Dict[str, Any]) -> Optional[InferenceParam
     obj = config.get("objective", {})
     if not obj:
         return None
-    extra = {}
-    for k in ["num_train_timesteps", "beta_schedule"]:
-        if k in obj:
-            extra[k] = obj[k]
-    clip_val = config.get("ramen_clip_value")
-    if clip_val is not None:
-        extra["ramen_clip_value"] = clip_val
 
     return InferenceParameters(
         type=obj.get("type"),
@@ -428,7 +405,6 @@ def _extract_inference_params(config: Dict[str, Any]) -> Optional[InferenceParam
         clip_sample_range=obj.get("clip_sample_range"),
         chunk_aggregation="first_n_action_steps",
         chunks_executed_per_inference=config.get("n_action_steps"),
-        extra=extra,
     )
 
 
@@ -575,7 +551,6 @@ def _extract_training_datasets(
             repo=repo,
             commit=commit,
             loader_class=loader,
-            contributes_to_norm_stats=True,
         ))
     return results
 
@@ -653,8 +628,6 @@ def generate_passport(
     # -- provenance --
     prov = Provenance(
         run_log_path=training_log.name if training_log else None,
-        merged_config_sha256=_sha256(config_path),
-        config_snapshot_path=str(config_path.relative_to(ckpt)),
     )
     if training_log:
         wandb_url = _parse_wandb_url(training_log)
@@ -698,16 +671,8 @@ def generate_passport(
     )
 
     # -- output_spec --
-    horizon = config.get("horizon")
     output_spec = OutputSpec(
-        actions=OutputActions(
-            layout="mirrors input_contract.actions",
-            sub_keys="see input_contract.actions.sub_keys",
-            horizon=horizon,
-            control_rate_hz=config.get("control_rate_hz"),
-        ),
         inference_parameters=_extract_inference_params(config),
-        post_processing=PostProcessing(unnormalize=True),
     )
 
     # -- weight_integrity --
@@ -734,6 +699,7 @@ def generate_passport(
             sample_input_shapes[key] = [1, n_obs] + shape
 
     action_dim = config.get("output_features", {}).get("action", {}).get("shape", [None])[0]
+    horizon = config.get("horizon")
     sample_output_shapes = {}
     if action_dim and horizon:
         sample_output_shapes["action"] = [1, horizon, action_dim]
@@ -747,18 +713,11 @@ def generate_passport(
         ),
     )
 
-    # -- runtime_constraints from config --
-    runtime = RuntimeConstraints()
-
     passport = ModelPassport(
-        generated_by=GeneratedBy(
-            tool="generate-passport",
-            version=SCHEMA_VERSION,
-        ),
+        generated_by="generate-passport",
         generated_at=generated_at or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         stack=config.get("policy_type", "unknown"),
         input_contract=input_contract,
-        model_identity=ModelIdentity(runtime_constraints=runtime),
         model_internals=model_internals,
         output_spec=output_spec,
         weight_integrity=weight_integrity,

@@ -21,6 +21,14 @@
 
 ## Task 1: Make Static Generation Deterministic [DONE]
 
+**Post-implementation notes:**
+- Removed legacy discovery (`_find_config`, `_find_stats`, `--allow-legacy-discovery`). `config_path` is required.
+- Removed `GeneratedBy` dataclass — `generated_by` is now a plain string.
+- Added recursive null/empty pruning to `_dataclass_to_dict` — JSON only contains populated fields.
+- Trimmed redundant/always-same fields: `output_spec.actions` (mirrored input_contract), `stats_fingerprint` (duplicated weight_integrity), `color_order`/`dtype`/`value_range` (always identical), `inference_parameters.extra` (training-time), uniform `norm_mask`, empty `model_identity`.
+- Also modified: `checkpoint-passport/checkpoint_passport/schema.py`
+- Also created: `checkpoint-passport/examples/sample_passport.json`
+
 **Files:**
 - Modify: `checkpoint-passport/checkpoint_passport/cli/generate.py`
 - Create: `checkpoint-passport/tests/test_generate_determinism.py`
