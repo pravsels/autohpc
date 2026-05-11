@@ -121,6 +121,10 @@ def main() -> None:
         "--dataset-path", type=Path, default=None,
         help="forwarded to validate-checkpoint (local dataset path)",
     )
+    parser.add_argument(
+        "--target-repo", type=Path, default=None,
+        help="forwarded to validate-checkpoint (deployment target repo)",
+    )
     args = parser.parse_args()
 
     ckpt_dir: Path = args.checkpoint_dir.resolve()
@@ -133,10 +137,12 @@ def main() -> None:
 
     extra_norm_stats = args.norm_stats or None
     dataset_path = args.dataset_path
+    target_repo = args.target_repo
 
     result = self_validate_passport(
         ckpt_dir,
         dataset_path=dataset_path,
+        target_repo=target_repo,
         extra_norm_stats=extra_norm_stats,
     )
 
@@ -238,6 +244,7 @@ def main() -> None:
     confirm = self_validate_passport(
         ckpt_dir,
         dataset_path=dataset_path,
+        target_repo=target_repo,
         extra_norm_stats=extra_norm_stats,
         require_signoff=True,
     )
