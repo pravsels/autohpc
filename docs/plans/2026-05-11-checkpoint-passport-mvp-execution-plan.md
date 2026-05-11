@@ -88,6 +88,16 @@ Expected: pass.
 
 ## Task 2: Replace OpenPI Materializer With Runtime Passport Seed [DONE]
 
+**Post-implementation notes:**
+- Deleted the materializer entirely (`config_materializers.py`, `cli/materialize_config.py`, `tests/test_materialize_config.py`) — it was the wrong abstraction, not repurposed.
+- The OpenPI seed extractor calls `cfg.data.create(assets_dirs, model_config)` to get the instantiated pipeline. The output transform's `action_dim` gives the real robot-facing dim (e.g. 7 for joints-only), not `model.action_dim` (32, the tokenized transformer dim). Both are recorded: `input_contract.actions.total_dim` = robot-facing, `model_internals.forward_graph.sample_output_shapes.action_tokens` = tokenized.
+- If `data.create()` fails (missing assets, wrong env), the extractor falls back gracefully to config attributes only — still produces a valid seed, just with fewer fields.
+- Real checkpoint test (`pi05_build_block_tower_baseline_6mix_joints_only`) showed `image_keys: []` because `BlockTowerInputs` doesn't expose an `image_keys` attribute. This is a known gap for Task 4 enrichment.
+- `model_type` is an enum (`ModelType.PI05`); the extractor stringifies via `.value` → `"pi05"`.
+- Training datasets parsed from OpenPI's bracket-delimited `repo_id` string (e.g. `"[repo1, repo2, ...]"`).
+- Passport seed validation (`passport_seed.py`) enforces the boundary: seeds cannot contain `schema_version`, `generated_at`, `generated_by`, `weight_integrity`, or `provenance` — those are assembler-owned.
+- `pyproject.toml`: removed `materialize-passport-config`, added `extract-passport-seed`.
+
 **Files:**
 - Delete or repurpose: `checkpoint-passport/checkpoint_passport/config_materializers.py`
 - Delete or repurpose: `checkpoint-passport/checkpoint_passport/cli/materialize_config.py`
@@ -190,13 +200,22 @@ uv run pytest tests/test_passport_seed.py tests/test_openpi_seed_extractor.py -q
 
 Expected: pass.
 
-## Task 3: Add Passport Seed Assembly [TODO]
+## Task 3: Add Passport Seed Assembly [DONE]
+
+**Post-implementation notes:**
+- Library module `assemble_passport.py` takes a validated seed dict + checkpoint dir, reuses filesystem/git helpers from `generate.py` (`_sha256`, `_hashable_files`, `_find_training_log`, `_git_head`, `_git_remote_url`, `_git_is_dirty`).
+- Returns a plain dict (not a `ModelPassport` dataclass) — uses `_prune()` for null/empty stripping, avoids schema round-trip overhead since seed sections are already plain dicts.
+- CLI wrapper matches `extract-passport-seed` conventions: `--checkpoint-dir`, `--seed`, `--out`, plus optional `--generated-at`, `--target-repo`, `--training-repo`.
+- `PASSPORT_SEED.json` added to `_hashable_files` skip set alongside `MODEL_PASSPORT.json` and `SIGNOFF.json` — it's a workflow artifact, not an inference-critical file.
+- Tested end-to-end on real checkpoint (`pi05_build_block_tower_baseline_6mix_joints_only`): `extract-passport-seed openpi` → `assemble-passport` produced a valid `MODEL_PASSPORT.json` with 42 files hashed.
+- 14 unit tests covering: basic assembly, seed section merging, weight integrity (hashing + exclusions), provenance, determinism, invalid seed rejection, missing checkpoint dir, and null/empty pruning.
 
 **Files:**
 - Create: `checkpoint-passport/checkpoint_passport/assemble_passport.py`
 - Create: `checkpoint-passport/checkpoint_passport/cli/assemble_passport.py`
 - Modify: `checkpoint-passport/pyproject.toml`
 - Create: `checkpoint-passport/tests/test_assemble_passport.py`
+- Modify: `checkpoint-passport/checkpoint_passport/cli/generate.py` (added `PASSPORT_SEED.json` to hash exclusion)
 
 **Step 1: Define passport seed**
 

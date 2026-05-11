@@ -161,7 +161,7 @@ def _hashable_files(ckpt: Path) -> List[Path]:
     needed for inference. Excludes README, TRAINING_LOG, passport/signoff,
     and hidden files.
     """
-    skip = {"MODEL_PASSPORT.json", "SIGNOFF.json", "README.md", "TRAINING_LOG.md"}
+    skip = {"MODEL_PASSPORT.json", "PASSPORT_SEED.json", "SIGNOFF.json", "README.md", "TRAINING_LOG.md"}
     files = []
     for p in sorted(ckpt.rglob("*")):
         if not p.is_file():

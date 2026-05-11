@@ -26,6 +26,7 @@ validate-checkpoint = "checkpoint_passport.cli.validate:main"
 sign-checkpoint = "checkpoint_passport.cli.sign:main"
 generate-passport = "checkpoint_passport.cli.generate:main"
 extract-passport-seed = "checkpoint_passport.cli.extract_passport_seed:main"
+assemble-passport = "checkpoint_passport.cli.assemble_passport:main"
 
 [tool.setuptools.packages.find]
 include = ["checkpoint_passport*"]
