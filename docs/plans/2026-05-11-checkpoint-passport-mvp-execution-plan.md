@@ -313,10 +313,17 @@ Do not register `lerobot` or generic HF extractors in the MVP unless they have t
 
 **Step 3: Use the known OpenPI adapter path**
 
-Use a documented path equivalent to:
+`missiontracker` is the alpha-robotics deployment/eval package. It lives at
+`/home/praveen/Desktop/code/alpha-robotics/missiontracker/` and is installed
+in the `alpha-robotics` conda env (`/home/praveen/miniconda3/envs/alpha-robotics`).
+OpenPI is also installed in that env.
+
+The adapter factory is at `missiontracker.adapters.factory`:
 
 ```python
-policy_info = load_policy_adapter(
+from missiontracker.adapters.factory import load_policy_adapter, PolicyInfo
+
+policy_info: PolicyInfo = load_policy_adapter(
     checkpoint_dir,
     device=device,
     force_architecture="openpi",
@@ -327,7 +334,14 @@ policy_info = load_policy_adapter(
 adapter = policy_info.adapter
 ```
 
+`PolicyInfo` is a dataclass with fields: `adapter`, `architecture`,
+`has_reward`, `action_dim`, `action_horizon`, `train_stats`, `metadata`.
+
 If `missiontracker` or OpenPI imports fail, print a clear missing-runtime error and stop. Do not inspect unrelated deployment code.
+
+To run commands in the correct env, use:
+`/home/praveen/miniconda3/envs/alpha-robotics/bin/python` or activate with
+`conda activate alpha-robotics`.
 
 **Step 4: Emit runtime enrichment**
 
@@ -353,6 +367,11 @@ uv run pytest tests/test_openpi_seed_extractor.py tests/test_openpi_extractor.py
 ```
 
 Expected: pass.
+
+For real checkpoint testing, use:
+`/home/praveen/Desktop/code/alpha-robotics/checkpoints/pi05-build-block-tower-baseline-6mix-joints-only`
+with config name `pi05_build_block_tower_baseline_6mix_joints_only` and the
+`alpha-robotics` conda env.
 
 ## Task 5: Add Minimal Publish Gate [TODO]
 
