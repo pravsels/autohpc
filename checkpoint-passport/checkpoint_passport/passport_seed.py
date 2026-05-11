@@ -30,6 +30,7 @@ ALLOWED_SEED_SECTIONS: Set[str] = {
     "model_identity",
     "model_internals",
     "transform_pipeline",
+    "reference_test_vector",
 }
 
 ASSEMBLER_OWNED_SECTIONS: Set[str] = {

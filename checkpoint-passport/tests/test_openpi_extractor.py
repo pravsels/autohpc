@@ -130,6 +130,25 @@ class FakeRuntimeAdapter(RuntimeAdapter):
     def library_versions(self) -> Dict[str, str]:
         return {"python": "3.11.14", "openpi": "0.3.1", "jax": "0.5.3"}
 
+    def extract_reference_sample(
+        self,
+        dataset_path,
+        *,
+        episode_index=0,
+        start_frame=0,
+        num_frames=10,
+    ) -> Dict[str, Any]:
+        import numpy as np
+        return {
+            "states": np.zeros((num_frames, 7), dtype=np.float32),
+            "images": {},
+            "prompt": "",
+            "episode_index": episode_index,
+            "start_frame": start_frame,
+            "num_frames": num_frames,
+            "dataset_path": str(dataset_path),
+        }
+
 
 # ── Fixtures ────────────────────────────────────────────────────────────
 

@@ -19,6 +19,8 @@
 - If an architecture is unsupported, fail fast with a stop-and-ask message.
 - If `README.md` or `TRAINING_LOG.md` is missing, HF upload is blocked.
 - Do not pretend OpenPI has a passport-compatible static config. Its input/output contract must come from its runtime pipeline.
+- `reference_test_vector` is required for signable passports. Agents must use a checked-in command path to create it; they must not invent one-off dataset sampling scripts.
+- Dataset repo IDs are required when known, but dataset commit pins are optional provenance. Missing dataset commits may be reported as a soft signal; they should not block signing by themselves.
 
 ## Task 1: Make Static Generation Deterministic [DONE]
 
@@ -306,10 +308,157 @@ Expected: pass.
 - Modify: `checkpoint-passport/checkpoint_passport/assemble_passport.py`
 - Create: `checkpoint-passport/tests/test_openpi_extractor.py`
 
-## Task 5: Add Minimal Publish Gate [TODO]
+## Task 5: Add OpenPI Reference Test Vector Extraction [DONE]
+
+**Post-implementation notes:**
+- Added `reference_test_vector` to `ALLOWED_SEED_SECTIONS` in `passport_seed.py`.
+- Added `extract_reference_sample()` to `RuntimeAdapter` protocol and `OpenPIRuntimeAdapter`.
+- Added `_extract_reference_test_vector()` to OpenPI extractor — writes `.npy` states + PNG images under `assets/reference_test_vector/`, hashes all files, populates seed section.
+- Added `_generate_dummy_reference_vector()` for MVP testing without model/dataset, exposed as `--dummy-reference-vector` CLI flag.
+- Added `--reference-dataset-path`, `--reference-episode-index`, `--reference-start-frame`, `--reference-num-frames` CLI args to `extract-passport-seed`.
+- Downgraded missing dataset commits from hard fail to soft signal in `check_training_datasets_resolvable` when repo IDs are present.
+- Fixed `deployment_repo_commit` check — no longer promotes to hard fail when `require_signoff=True` but no `--target-repo` was provided.
+- Bumped extractor version to `0.3.0`.
+- Created `tests/test_reference_test_vector.py` (13 tests covering extraction, file hashing, prompts, provenance, dummy vector, mutual exclusivity, soft signals, schema validation).
+- Updated `FakeRuntimeAdapter` in `test_openpi_extractor.py` to satisfy new protocol.
+
+**Files:**
+- Modify: `checkpoint-passport/checkpoint_passport/passport_seed.py`
+- Modify: `checkpoint-passport/checkpoint_passport/runtime_extractors/openpi.py`
+- Modify: `checkpoint-passport/checkpoint_passport/runtime_adapters/base.py`
+- Modify: `checkpoint-passport/checkpoint_passport/runtime_adapters/openpi.py`
+- Modify: `checkpoint-passport/checkpoint_passport/cli/extract_passport_seed.py`
+- Modify: `checkpoint-passport/checkpoint_passport/kernel/input_expectation.py`
+- Modify: `checkpoint-passport/tests/test_openpi_extractor.py`
+- Create: `checkpoint-passport/tests/test_reference_test_vector.py`
+
+**Step 1: Add tests first**
+
+Write tests for the real contract before changing implementation:
+
+- OpenPI extraction with reference data writes a top-level `reference_test_vector` section into `PASSPORT_SEED.json`.
+- The extractor writes deterministic assets under `<ckpt>/assets/reference_test_vector/`.
+- The state array is saved as `.npy`, hashed, and referenced by relative path.
+- Image frames are saved under a directory, hashed per camera/frame, and referenced by relative path.
+- Missing dataset path, missing required keys, unavailable image data, or too few frames fails with a stop-and-ask style error.
+- `training_datasets_resolvable` treats missing dataset commits as a soft signal or pass-with-warning, not a hard failure, when dataset repo IDs are present.
+
+Run:
+
+```bash
+cd checkpoint-passport
+uv run pytest tests/test_reference_test_vector.py tests/test_openpi_extractor.py -q
+```
+
+Expected before implementation: fail because no checked-in command path creates
+`reference_test_vector`.
+
+**Step 2: Extend the OpenPI extractor CLI**
+
+Fold reference vector creation into the existing OpenPI command so agents do not
+choose between multiple scripts:
+
+```bash
+extract-passport-seed openpi \
+  --checkpoint-dir <ckpt> \
+  --out <ckpt>/PASSPORT_SEED.json \
+  --openpi-config-name <name> \
+  --default-prompt "<prompt>" \
+  --resize-size 224 \
+  --device cuda \
+  --reference-dataset-path <dataset> \
+  --reference-episode-index <episode> \
+  --reference-start-frame <frame> \
+  --reference-num-frames 10
+```
+
+The command must not discover a dataset path. If the path or sample selection is
+missing, stop and ask for those exact values.
+
+**Step 3: Define adapter responsibility**
+
+Add a runtime adapter method that returns a normalized reference sample, not a
+passport fragment. The OpenPI extractor remains responsible for writing files,
+hashing them, and shaping the final schema.
+
+The adapter output should include:
+
+- consecutive state vectors shaped `(n_frames, state_dim)`
+- image frames grouped by camera key
+- prompt/task string if present in the dataset sample
+- enough metadata to report the dataset path, episode index, and frame range in
+  `reference_test_vector.notes`
+
+Do not use synthetic zero inputs or smoke calibration data for this section.
+Smoke inference and reference vectors serve different purposes.
+
+**Step 4: Emit seed-owned reference section**
+
+Allow `reference_test_vector` as a top-level key in `PassportSeed`. It is
+runtime-owned for OpenPI because the relevant data layout is produced by the
+OpenPI dataset/runtime path.
+
+Write assets to:
+
+```text
+assets/reference_test_vector/input_states.npy
+assets/reference_test_vector/images/<camera_key>_<frame_index>.png
+```
+
+Populate:
+
+- `reference_test_vector.n_frames`
+- `reference_test_vector.input_state_path`
+- `reference_test_vector.input_state_hash`
+- `reference_test_vector.input_images_path`
+- `reference_test_vector.input_images_hash`
+- `reference_test_vector.input_prompt`
+- `reference_test_vector.notes`
+
+All paths must be relative to the checkpoint root.
+
+**Step 5: Keep dataset commits optional**
+
+Update `training_datasets_resolvable` so missing `commit` values do not create a
+hard failure when `repo_id` values are present. The check should still fail for
+malformed or empty dataset entries.
+
+If commit values are present, validate them as before. If commit values are
+missing, report a soft signal such as:
+
+```text
+dataset repo IDs present but commits are not pinned; reproducibility provenance is weaker
+```
+
+Do not add automatic HF API lookup to the default OpenPI flow. Remote commit
+resolution can be a future opt-in enrichment, not an MVP signing requirement.
+
+**Step 6: Validate clean signing path**
+
+After assembly, `validate-checkpoint` should pass the
+`reference_test_vector` hard check without `--skip-section`.
+
+Run:
+
+```bash
+cd checkpoint-passport
+uv run pytest tests/test_reference_test_vector.py tests/test_openpi_extractor.py -q
+```
+
+Expected: pass.
+
+## Task 6: Add Minimal Publish Gate [DONE]
+
+**Post-implementation notes:**
+- Created `check_publish_ready.py` — checks for required files (README.md, TRAINING_LOG.md, MODEL_PASSPORT.json, SIGNOFF.json), non-empty docs, valid JSON, then runs internal validator with `require_signoff=True`. Reports packaging and validation errors separately.
+- Created `publish_checkpoint.py` — `upload` subcommand gates on `check-publish-ready`, auto-creates HF repo, supports `--ignore-patterns` for excluding dirs (e.g. `retain/**`). `download` subcommand gates on post-download `validate-checkpoint --require-signoff`.
+- Registered both as `[project.scripts]` in `pyproject.toml`.
+- Created `tests/test_publish_ready.py` covering missing files, empty docs, invalid JSON, signoff validation, `--json` output, upload gate, download gate.
+- End-to-end tested on real OpenPI checkpoint: upload to `pravsels/pi05-build-block-tower-passport-test`, download, and post-download validation correctly caught incomplete download (missing weight files).
 
 **Files:**
 - Create: `checkpoint-passport/checkpoint_passport/cli/check_publish_ready.py`
+- Create: `checkpoint-passport/checkpoint_passport/cli/publish_checkpoint.py`
 - Modify: `checkpoint-passport/pyproject.toml`
 - Create: `checkpoint-passport/tests/test_publish_ready.py`
 
@@ -345,7 +494,42 @@ Call the same internal validation path as `validate-checkpoint --require-signoff
 
 Report packaging failures separately from passport/signoff validation failures.
 
-**Step 4: Test**
+**Step 4: Add bounded HF publish/download helpers**
+
+Agents should not author upload/download shell scripts during checkpoint
+handoff. Add small first-party helpers or a single helper with subcommands:
+
+```bash
+publish-checkpoint upload \
+  --checkpoint-dir <ckpt> \
+  --repo-id <user-or-org>/<repo> \
+  --revision main
+
+publish-checkpoint download \
+  --repo-id <user-or-org>/<repo> \
+  --revision <sha-or-branch> \
+  --out <local_dir>
+```
+
+Upload must run `check-publish-ready <ckpt>` first and refuse to continue on
+non-zero exit. Download must run `validate-checkpoint <downloaded_dir>
+--require-signoff` after fetching and refuse to report success on non-zero
+exit.
+
+If authentication, repo creation, revision choice, or target path is missing,
+stop and ask. Do not generate ad hoc `huggingface-cli upload`, `hf download`,
+`git lfs`, `rsync`, or Python upload scripts.
+
+Register if implemented as a separate command:
+
+```toml
+publish-checkpoint = "checkpoint_passport.cli.publish_checkpoint:main"
+```
+
+Keep this helper minimal. It should orchestrate existing HF CLI/library calls
+with fixed validation gates, not become a general release manager.
+
+**Step 5: Test**
 
 Test:
 
@@ -355,6 +539,8 @@ Test:
 - missing/invalid signoff
 - `--json` output shape
 - multiple errors reported together
+- upload refuses when `check-publish-ready` fails
+- download refuses success when `validate-checkpoint --require-signoff` fails
 
 Run:
 
@@ -365,7 +551,7 @@ uv run pytest tests/test_publish_ready.py -q
 
 Expected: pass.
 
-## Task 6: Rewrite Checkpoint Passport Skill [TODO]
+## Task 7: Rewrite Checkpoint Passport Skill [TODO]
 
 **Files:**
 - Modify: `checkpoint-passport/SKILL.md`
@@ -376,15 +562,58 @@ Expected: pass.
 
 New flow:
 
-1. Materialize config when needed.
-2. For config-bearing checkpoints, generate static passport deterministically.
-3. For OpenPI checkpoints, run `extract-passport-seed openpi`.
+1. For config-bearing checkpoints, run `generate-passport --config ...`.
+2. For OpenPI checkpoints, run `extract-passport-seed openpi`.
+3. For OpenPI checkpoints, include reference vector arguments when creating the seed.
 4. Assemble `MODEL_PASSPORT.json` from the OpenPI seed.
-5. Validate.
-6. Sign.
-7. Check publish readiness before HF upload.
+5. Do not materialize a fake OpenPI config.
+6. Validate.
+7. Sign without skipped hard sections.
+8. Check publish readiness before HF upload.
 
-**Step 2: Remove loose instructions**
+**Step 2: Add runtime-adapter smoke rule**
+
+For OpenPI, smoke testing is part of the checked-in runtime adapter path:
+
+```bash
+extract-passport-seed openpi \
+  --checkpoint-dir <ckpt> \
+  --out <ckpt>/PASSPORT_SEED.json \
+  --openpi-config-name <name> \
+  --default-prompt "<prompt>" \
+  --resize-size 224 \
+  --device cuda
+```
+
+The agent must not write a separate smoke-test script, call OpenPI internals
+directly, or invent calibration inputs. If runtime enrichment fails because the
+OpenPI environment, checkpoint assets, or device are unavailable, stop and
+report the exact error.
+
+**Step 3: Add reference vector rule**
+
+For OpenPI, reference vector creation is part of the checked-in seed extraction
+path:
+
+```bash
+extract-passport-seed openpi \
+  --checkpoint-dir <ckpt> \
+  --out <ckpt>/PASSPORT_SEED.json \
+  --openpi-config-name <name> \
+  --default-prompt "<prompt>" \
+  --resize-size 224 \
+  --device cuda \
+  --reference-dataset-path <dataset> \
+  --reference-episode-index <episode> \
+  --reference-start-frame <frame> \
+  --reference-num-frames 10
+```
+
+The agent must not write a separate dataset sampling script. If dataset path,
+episode, or frame range is unknown, stop and ask. Dataset commits are optional
+provenance, but the reference vector itself is required for signing.
+
+**Step 4: Remove loose instructions**
 
 Remove or replace instructions to:
 
@@ -393,26 +622,32 @@ Remove or replace instructions to:
 - read source until the inference path is understood
 - splice JSON with a small script
 - fill fields by judgment
+- write a separate smoke-test script
+- write upload/download scripts for HF handoff
 
-**Step 3: Add stop gates**
+**Step 5: Add stop gates**
 
 Agents stop when:
 
 - a config-bearing checkpoint has no explicit config path
 - architecture is unsupported
 - OpenPI runtime imports are missing
+- OpenPI runtime enrichment fails because env/assets/device are unavailable
+- OpenPI reference dataset path, episode, or frame range is missing
+- OpenPI reference vector extraction cannot produce real state/image assets
 - required extractor args are missing
 - passport seed validation/assembly fails
 - publish gate fails
+- HF auth, repo id, revision, or local output path is missing
 
-**Step 4: Keep README short**
+**Step 6: Keep README short**
 
 `checkpoint-passport/README.md` should list commands and point to `SKILL.md`. Root `README.md` should point to the bounded workflow and mention publish readiness. Do not duplicate the full workflow in three places.
 
-## Task 7: Run Focused MVP Tests [TODO]
+## Task 8: Run Focused MVP Tests [TODO]
 
 **Files:**
-- Existing tests from Tasks 1-5
+- Existing tests from Tasks 1-6
 
 Run:
 
@@ -424,6 +659,7 @@ uv run pytest \
   tests/test_openpi_seed_extractor.py \
   tests/test_assemble_passport.py \
   tests/test_openpi_extractor.py \
+  tests/test_reference_test_vector.py \
   tests/test_publish_ready.py \
   -q
 ```
@@ -464,7 +700,12 @@ MVP is complete when:
 - HF network resolution is opt-in only.
 - OpenPI checkpoints without `config.json` have a documented passport seed extractor path.
 - OpenPI runtime extraction is a documented command that emits passport seed sections, not agent discovery.
+- OpenPI reference test vectors are created by a documented command path using real dataset frames, not synthetic smoke inputs or ad hoc scripts.
 - `MODEL_PASSPORT.json` is assembled by `assemble-passport`, not ad hoc scripts.
+- `reference_test_vector` validation passes without `--skip-section`.
+- Missing dataset commit pins are treated as optional provenance, not a hard signing blocker.
 - `checkpoint-passport/SKILL.md` no longer contains loose Phase 2 instructions.
 - HF upload is blocked unless `README.md`, `TRAINING_LOG.md`, `MODEL_PASSPORT.json`, and `SIGNOFF.json` are present and valid.
+- HF upload/download uses documented `publish-checkpoint` or equivalent fixed
+  commands, not agent-authored scripts.
 - Focused MVP tests pass.

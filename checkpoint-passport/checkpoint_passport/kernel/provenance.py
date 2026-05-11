@@ -172,7 +172,14 @@ def check_deployment_repo_commit(
     expected = pv.deployment_repo_commit
 
     if not expected:
-        status = Status.FAIL if require_signoff else Status.SOFT_SIGNAL
+        # Missing deployment_repo_commit is only a hard fail when
+        # require_signoff is True AND a target_repo was provided to
+        # verify against.  Without a target_repo there's nothing to
+        # enforce — the operator didn't claim a deployment target.
+        if require_signoff and target_repo is not None:
+            status = Status.FAIL
+        else:
+            status = Status.SOFT_SIGNAL
         return Observation(
             check="deployment_repo_commit",
             status=status,

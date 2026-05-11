@@ -558,14 +558,18 @@ def check_training_datasets_resolvable(load: PassportLoadResult) -> Observation:
         )
 
     bad: List[Dict[str, Any]] = []
+    unpinned: List[int] = []
     for i, d in enumerate(tds):
         problems = []
         if not d.repo or not _REPO_RE.match(d.repo):
             problems.append("repo not 'user/name'")
-        if not d.commit or not _COMMIT_RE.match(d.commit):
-            problems.append("commit not 7-40 hex chars")
-        elif _NULL_COMMIT_RE.match(d.commit):
-            problems.append("commit is all-zeros placeholder")
+        if d.commit is not None and d.commit != "":
+            if not _COMMIT_RE.match(d.commit):
+                problems.append("commit not 7-40 hex chars")
+            elif _NULL_COMMIT_RE.match(d.commit):
+                problems.append("commit is all-zeros placeholder")
+        else:
+            unpinned.append(i)
         if problems:
             bad.append({"index": i, "repo": d.repo, "commit": d.commit, "problems": problems})
 
@@ -576,6 +580,20 @@ def check_training_datasets_resolvable(load: PassportLoadResult) -> Observation:
             message=f"{len(bad)} training dataset entry(ies) have malformed "
                     "repo/commit fields",
             details={"problems": bad},
+            category=CATEGORY,
+        )
+    if unpinned:
+        return Observation(
+            check="training_datasets_resolvable",
+            status=Status.SOFT_SIGNAL,
+            message=(
+                f"dataset repo IDs present but {len(unpinned)} of {len(tds)} "
+                "commits are not pinned; reproducibility provenance is weaker"
+            ),
+            details={
+                "unpinned_indices": unpinned,
+                "datasets": [{"repo": d.repo, "commit": d.commit} for d in tds],
+            },
             category=CATEGORY,
         )
     return Observation(

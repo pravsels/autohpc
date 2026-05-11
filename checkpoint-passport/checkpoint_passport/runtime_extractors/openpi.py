@@ -21,6 +21,8 @@ When --device is provided (runtime enrichment):
 
 from __future__ import annotations
 
+import hashlib
+import io
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -31,7 +33,7 @@ from checkpoint_passport.runtime_extractors.base import (
 )
 
 
-_EXTRACTOR_VERSION = "0.2.0"
+_EXTRACTOR_VERSION = "0.3.0"
 
 
 def _import_openpi_config():
@@ -217,6 +219,176 @@ def _extract_model_internals(cfg: Any) -> Dict[str, Any]:
     return internals
 
 
+def _sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _extract_reference_test_vector(
+    seed: Dict[str, Any],
+    checkpoint_dir: Path,
+    adapter: Any,
+    *,
+    reference_dataset_path: Path,
+    reference_episode_index: int,
+    reference_start_frame: int,
+    reference_num_frames: int,
+) -> None:
+    """Extract reference data from a real dataset and write assets."""
+    import numpy as np
+
+    sample = adapter.extract_reference_sample(
+        reference_dataset_path,
+        episode_index=reference_episode_index,
+        start_frame=reference_start_frame,
+        num_frames=reference_num_frames,
+    )
+
+    rtv_dir = checkpoint_dir / "assets" / "reference_test_vector"
+    rtv_dir.mkdir(parents=True, exist_ok=True)
+    images_dir = rtv_dir / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save state array
+    state_path = rtv_dir / "input_states.npy"
+    np.save(state_path, sample["states"])
+    state_hash = _sha256_file(state_path)
+
+    # Save image frames
+    images_hash: Dict[str, List[str]] = {}
+    for cam_key, frames in sample["images"].items():
+        cam_hashes = []
+        for i, frame in enumerate(frames):
+            img_path = images_dir / f"{cam_key}_{i:03d}.png"
+            try:
+                from PIL import Image
+                img = Image.fromarray(frame)
+                img.save(img_path)
+            except ImportError:
+                import struct
+                import zlib
+                _write_png_minimal(frame, img_path)
+            cam_hashes.append(_sha256_file(img_path))
+        images_hash[cam_key] = cam_hashes
+
+    rel_state = str(state_path.relative_to(checkpoint_dir))
+    rel_images = str(images_dir.relative_to(checkpoint_dir))
+
+    seed["reference_test_vector"] = {
+        "n_frames": reference_num_frames,
+        "input_state_path": rel_state,
+        "input_state_hash": state_hash,
+        "input_images_path": rel_images,
+        "input_images_hash": images_hash,
+        "input_prompt": sample.get("prompt", ""),
+        "notes": (
+            f"dataset={sample.get('dataset_path', str(reference_dataset_path))}, "
+            f"episode={reference_episode_index}, "
+            f"frames={reference_start_frame}..{reference_start_frame + reference_num_frames - 1}"
+        ),
+    }
+
+
+def _generate_dummy_reference_vector(
+    seed: Dict[str, Any],
+    checkpoint_dir: Path,
+    *,
+    num_frames: int = 10,
+    state_dim: int = 7,
+    image_size: int = 224,
+    cameras: Optional[List[str]] = None,
+    prompt: str = "dummy reference vector for testing",
+) -> None:
+    """Generate a synthetic reference test vector without model or dataset.
+
+    Writes the same file layout and seed schema as the real extraction path
+    so that downstream validation treats it identically.  Useful for MVP
+    testing and CI where the full runtime stack isn't available.
+    """
+    import numpy as np
+
+    if cameras is None:
+        cameras = ["front", "wrist"]
+
+    rtv_dir = checkpoint_dir / "assets" / "reference_test_vector"
+    rtv_dir.mkdir(parents=True, exist_ok=True)
+    images_dir = rtv_dir / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    rng = np.random.RandomState(42)
+    states = rng.randn(num_frames, state_dim).astype(np.float32)
+    state_path = rtv_dir / "input_states.npy"
+    np.save(state_path, states)
+    state_hash = _sha256_file(state_path)
+
+    images_hash: Dict[str, List[str]] = {}
+    for cam in cameras:
+        cam_hashes = []
+        for i in range(num_frames):
+            img = np.random.RandomState(42 + i).randint(
+                0, 255, (image_size, image_size, 3), dtype=np.uint8,
+            )
+            img_path = images_dir / f"{cam}_{i:03d}.png"
+            _write_png_minimal(img, img_path)
+            cam_hashes.append(_sha256_file(img_path))
+        images_hash[cam] = cam_hashes
+
+    rel_state = str(state_path.relative_to(checkpoint_dir))
+    rel_images = str(images_dir.relative_to(checkpoint_dir))
+
+    seed["reference_test_vector"] = {
+        "n_frames": num_frames,
+        "input_state_path": rel_state,
+        "input_state_hash": state_hash,
+        "input_images_path": rel_images,
+        "input_images_hash": images_hash,
+        "input_prompt": prompt,
+        "notes": "dummy reference vector (synthetic data, seed=42)",
+    }
+
+
+def _write_png_minimal(array: Any, path: Path) -> None:
+    """Write a numpy uint8 HWC array as PNG without PIL."""
+    import struct
+    import zlib
+
+    h, w = array.shape[:2]
+    c = array.shape[2] if array.ndim == 3 else 1
+
+    if c == 3:
+        color_type = 2
+    elif c == 1:
+        color_type = 0
+        array = array.reshape(h, w)
+    else:
+        color_type = 2
+
+    raw_rows = b""
+    for row in range(h):
+        raw_rows += b"\x00" + array[row].tobytes()
+
+    compressed = zlib.compress(raw_rows)
+
+    def _chunk(chunk_type: bytes, data: bytes) -> bytes:
+        c = chunk_type + data
+        return struct.pack(">I", len(data)) + c + struct.pack(">I", zlib.crc32(c) & 0xFFFFFFFF)
+
+    ihdr_data = struct.pack(">IIBBBBB", w, h, 8, color_type, 0, 0, 0)
+
+    with open(path, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n")
+        f.write(_chunk(b"IHDR", ihdr_data))
+        f.write(_chunk(b"IDAT", compressed))
+        f.write(_chunk(b"IEND", b""))
+
+
 def _enrich_with_runtime(
     seed: Dict[str, Any],
     checkpoint_dir: Path,
@@ -225,6 +397,10 @@ def _enrich_with_runtime(
     default_prompt: Optional[str],
     resize_size: Optional[int],
     device: str,
+    reference_dataset_path: Optional[Path] = None,
+    reference_episode_index: int = 0,
+    reference_start_frame: int = 0,
+    reference_num_frames: int = 10,
 ) -> None:
     """Load the model via the RuntimeAdapter protocol and enrich the seed."""
     from checkpoint_passport.runtime_adapters.openpi import OpenPIRuntimeAdapter
@@ -255,6 +431,17 @@ def _enrich_with_runtime(
         seed.setdefault("model_internals", {})
         seed["model_internals"]["numerical_health"] = {"smoke": smoke}
 
+    if reference_dataset_path is not None:
+        _extract_reference_test_vector(
+            seed,
+            checkpoint_dir,
+            adapter,
+            reference_dataset_path=reference_dataset_path,
+            reference_episode_index=reference_episode_index,
+            reference_start_frame=reference_start_frame,
+            reference_num_frames=reference_num_frames,
+        )
+
 
 class OpenPIExtractor(BaseExtractor):
     """Extracts a passport seed from an OpenPI checkpoint."""
@@ -267,7 +454,30 @@ class OpenPIExtractor(BaseExtractor):
         default_prompt: Optional[str] = None,
         resize_size: Optional[int] = None,
         device: Optional[str] = None,
+        reference_dataset_path: Optional[Path] = None,
+        reference_episode_index: int = 0,
+        reference_start_frame: int = 0,
+        reference_num_frames: int = 10,
+        dummy_reference_vector: bool = False,
     ) -> Dict[str, Any]:
+        # Validate reference args: if any frame selection is specified,
+        # dataset path is required.
+        has_ref_args = (
+            reference_episode_index != 0
+            or reference_start_frame != 0
+            or reference_num_frames != 10
+        )
+        if reference_dataset_path is None and has_ref_args:
+            raise ValueError(
+                "--reference-dataset-path is required when specifying "
+                "reference episode/frame selection"
+            )
+        if dummy_reference_vector and reference_dataset_path is not None:
+            raise ValueError(
+                "--dummy-reference-vector and --reference-dataset-path "
+                "are mutually exclusive"
+            )
+
         config_mod = _import_openpi_config()
         cfg = config_mod.get_config(config_name)
 
@@ -321,6 +531,24 @@ class OpenPIExtractor(BaseExtractor):
                 default_prompt=default_prompt,
                 resize_size=resize_size,
                 device=device,
+                reference_dataset_path=reference_dataset_path,
+                reference_episode_index=reference_episode_index,
+                reference_start_frame=reference_start_frame,
+                reference_num_frames=reference_num_frames,
+            )
+
+        if dummy_reference_vector:
+            state_dim = 7
+            ic = seed.get("input_contract", {})
+            actions = ic.get("actions", {})
+            if "dim" in actions:
+                state_dim = actions["dim"]
+            _generate_dummy_reference_vector(
+                seed,
+                checkpoint_dir,
+                num_frames=reference_num_frames,
+                state_dim=state_dim,
+                prompt=default_prompt or "dummy reference vector for testing",
             )
 
         return seed

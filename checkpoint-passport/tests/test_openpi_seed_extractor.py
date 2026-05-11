@@ -151,7 +151,7 @@ def test_extractor_emits_extractor_metadata(tmp_path: Path, monkeypatch):
     seed = extractor.extract_seed(tmp_path, config_name="my_config")
 
     assert seed["extractor"]["extractor_name"] == "openpi"
-    assert seed["extractor"]["extractor_version"] == "0.2.0"
+    assert seed["extractor"]["extractor_version"] == "0.3.0"
     assert seed["extractor"]["openpi_config_name"] == "my_config"
 
 

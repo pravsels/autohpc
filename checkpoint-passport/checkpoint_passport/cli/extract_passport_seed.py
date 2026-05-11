@@ -68,6 +68,28 @@ def main() -> None:
              "when set, loads model weights to extract library versions, "
              "parameter summary, and smoke results",
     )
+    parser.add_argument(
+        "--reference-dataset-path", type=Path, default=None,
+        help="path to a LeRobot dataset for reference test vector extraction; "
+             "requires --device",
+    )
+    parser.add_argument(
+        "--reference-episode-index", type=int, default=0,
+        help="episode index within the dataset (default: 0)",
+    )
+    parser.add_argument(
+        "--reference-start-frame", type=int, default=0,
+        help="first frame index to extract (default: 0)",
+    )
+    parser.add_argument(
+        "--reference-num-frames", type=int, default=10,
+        help="number of consecutive frames to extract (default: 10)",
+    )
+    parser.add_argument(
+        "--dummy-reference-vector", action="store_true",
+        help="generate a synthetic reference test vector (no model/dataset needed); "
+             "mutually exclusive with --reference-dataset-path",
+    )
     args = parser.parse_args()
 
     backend = args.backend.lower()
@@ -96,6 +118,11 @@ def main() -> None:
                 default_prompt=args.default_prompt,
                 resize_size=args.resize_size,
                 device=args.device,
+                reference_dataset_path=args.reference_dataset_path,
+                reference_episode_index=args.reference_episode_index,
+                reference_start_frame=args.reference_start_frame,
+                reference_num_frames=args.reference_num_frames,
+                dummy_reference_vector=args.dummy_reference_vector,
             )
 
         validate_seed(seed)

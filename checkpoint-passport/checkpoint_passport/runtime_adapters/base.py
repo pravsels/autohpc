@@ -46,3 +46,26 @@ class RuntimeAdapter(abc.ABC):
     @abc.abstractmethod
     def library_versions(self) -> Dict[str, str]:
         """Return ``{lib_name: version}`` for libraries in this env."""
+
+    @abc.abstractmethod
+    def extract_reference_sample(
+        self,
+        dataset_path: Path,
+        *,
+        episode_index: int = 0,
+        start_frame: int = 0,
+        num_frames: int = 10,
+    ) -> Dict[str, Any]:
+        """Load consecutive frames from a real dataset as reference data.
+
+        Returns a dict with:
+            - ``"states"``: numpy array shaped ``(num_frames, state_dim)``
+            - ``"images"``: ``{camera_key: [numpy_array per frame]}``
+            - ``"prompt"``: task/language string if present
+            - ``"episode_index"``, ``"start_frame"``, ``"num_frames"``
+            - ``"dataset_path"``: str
+
+        Raises:
+            ValueError if the dataset is unreadable or the requested
+            range is out of bounds.
+        """

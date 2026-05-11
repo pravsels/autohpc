@@ -231,3 +231,95 @@ class OpenPIRuntimeAdapter(RuntimeAdapter):
             except (ImportError, ModuleNotFoundError):
                 pass
         return versions
+
+    def extract_reference_sample(
+        self,
+        dataset_path: Path,
+        *,
+        episode_index: int = 0,
+        start_frame: int = 0,
+        num_frames: int = 10,
+    ) -> Dict[str, Any]:
+        import numpy as np
+
+        try:
+            from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
+        except ImportError:
+            raise ValueError(
+                "lerobot is required for reference sample extraction. "
+                "Install it in the target environment."
+            )
+
+        ds = LeRobotDataset(str(dataset_path))
+
+        ep_indices = [
+            i for i, ep in enumerate(ds.episodes)
+            if ep["episode_index"] == episode_index
+        ] if hasattr(ds, "episodes") else []
+
+        frame_indices = list(range(start_frame, start_frame + num_frames))
+
+        states_list = []
+        images: Dict[str, list] = {}
+
+        for fi in frame_indices:
+            try:
+                sample = ds[fi]
+            except (IndexError, KeyError) as exc:
+                raise ValueError(
+                    f"Cannot read frame {fi} from dataset at {dataset_path}: {exc}"
+                ) from exc
+
+            state_keys = sorted(
+                k for k in sample
+                if k.startswith("observation.state")
+                and not isinstance(sample[k], str)
+            )
+            if state_keys:
+                state_parts = []
+                for sk in state_keys:
+                    v = sample[sk]
+                    if hasattr(v, "numpy"):
+                        v = v.numpy()
+                    state_parts.append(np.asarray(v).flatten())
+                states_list.append(np.concatenate(state_parts))
+
+            image_keys = sorted(
+                k for k in sample if k.startswith("observation.image")
+            )
+            for ik in image_keys:
+                cam_name = ik.replace("observation.images.", "").replace("observation.image.", "")
+                img = sample[ik]
+                if hasattr(img, "numpy"):
+                    img = img.numpy()
+                img = np.asarray(img)
+                if img.ndim == 3 and img.shape[0] in (1, 3):
+                    img = np.transpose(img, (1, 2, 0))
+                if img.dtype != np.uint8:
+                    if img.max() <= 1.0:
+                        img = (img * 255).astype(np.uint8)
+                    else:
+                        img = img.astype(np.uint8)
+                images.setdefault(cam_name, []).append(img)
+
+        states = np.stack(states_list) if states_list else np.zeros((num_frames, 0), dtype=np.float32)
+
+        prompt_val = ""
+        try:
+            sample_0 = ds[start_frame]
+            for pk in ("prompt", "language_instruction", "task"):
+                if pk in sample_0 and isinstance(sample_0[pk], str):
+                    prompt_val = sample_0[pk]
+                    break
+        except Exception:
+            pass
+
+        return {
+            "states": states,
+            "images": images,
+            "prompt": prompt_val or (self._default_prompt or ""),
+            "episode_index": episode_index,
+            "start_frame": start_frame,
+            "num_frames": num_frames,
+            "dataset_path": str(dataset_path),
+        }
