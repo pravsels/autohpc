@@ -91,9 +91,10 @@ def self_validate_passport(
         resolves to a local HF cache snapshot.
     target_repo
         Optional path to the deployment target repo (e.g. alpha-robotics).
-        When provided, the validator checks that the repo's HEAD matches
-        ``provenance.deployment_repo_commit`` and the working tree is
-        clean.  Hard-fails on mismatch or dirty state.
+        When provided, the validator reports whether the repo's HEAD matches
+        ``provenance.deployment_repo_commit`` and whether the working tree is
+        clean.  Deployment repo drift is debug context only and is reported as
+        a soft signal, not a load gate.
     require_signoff
         When true, missing SIGNOFF.json becomes a hard FAIL instead of
         a SOFT_SIGNAL.  Use this on production deployment paths.

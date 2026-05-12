@@ -437,12 +437,14 @@ class Provenance:
     run_log_path: Optional[str] = None            # relative .md path OR https:// URI
     training_repo: Optional[str] = None           # git remote URL
     training_repo_commit: Optional[str] = None    # full 40-char sha
+    passport_creation_repo: Optional[str] = None  # autohpc/tooling repo used to create the passport
+    passport_creation_repo_commit: Optional[str] = None  # tooling commit used to create the passport
     config_snapshot_path: Optional[str] = None    # path to saved training config
     merged_config_sha256: Optional[str] = None    # hash of the resolved training config
     parent_checkpoint: Optional[str] = None       # passport hash of parent if fine-tuned
     parent_description: Optional[str] = None      # e.g. "pretrained DiT base, 50K steps on ..."
     deployment_repo: Optional[str] = None         # git remote URL of target deployment repo
-    deployment_repo_commit: Optional[str] = None  # expected commit; validator hard-fails on mismatch or dirty tree
+    deployment_repo_commit: Optional[str] = None  # optional debug pointer; not a load gate
 
 
 # ── transform_pipeline ──────────────────────────────────────────────────

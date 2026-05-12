@@ -45,7 +45,7 @@ generate-passport <ckpt_dir> \
   --dataset user/dataset@abc123:lerobot.datasets.LeRobotDataset
 ```
 
-`--config` is required. `--stats`, `--target-repo`, `--training-repo`, `--dataset` are optional but strongly recommended. `--resolve-remote-revisions` is the only path that calls HF APIs; it is off by default.
+`--config` and `--training-repo` are required for signable passports because validation requires `provenance.training_repo_commit`. `--stats` and `--dataset` are optional but strongly recommended. `--target-repo` is optional deployment debug context only. `--resolve-remote-revisions` is the only path that calls HF APIs; it is off by default.
 
 After this, skip to [Validate](#validate).
 
@@ -105,11 +105,13 @@ assemble-passport \
   --checkpoint-dir <ckpt> \
   --seed <ckpt>/PASSPORT_SEED.json \
   --out <ckpt>/MODEL_PASSPORT.json \
-  --target-repo <deployment_repo_path> \
-  --training-repo <training_code_repo_path>
+  --training-repo <training_code_repo_path> \
+  --target-repo <deployment_repo_path>
 ```
 
 The assembler reads the seed, hashes all checkpoint files for `weight_integrity`, populates `provenance` from git state, attaches metadata (`schema_version`, `generated_at`, `generated_by`), and writes `MODEL_PASSPORT.json`.
+
+`--training-repo` is required for signable passports. `--target-repo` is optional debug context and must not be treated as a load gate.
 
 Use `--skip-dir retain` (repeatable) to exclude training artifacts from hashing. `generate-passport` also accepts `--skip-dir` and `--skip-file` for the same purpose.
 
@@ -133,7 +135,7 @@ Optional flags:
 | Flag | Purpose |
 |------|---------|
 | `--show-not-checked` | Include NOT_CHECKED rows (verbose forensic view) |
-| `--target-repo <path>` | Enable deployment_repo_commit check |
+| `--target-repo <path>` | Optional deployment debug context; drift is reported as a soft signal, not a load gate |
 | `--dataset-path <path>` | Enable input_contract_vs_dataset cross-check |
 | `--require-signoff` | Missing SIGNOFF.json becomes hard fail |
 | `--skip-section <category>` | Drop checks for a category while iterating |
@@ -218,8 +220,8 @@ Stop and ask the user when:
 - **Passport seed validation or assembly fails.** Report the validation errors.
 - **Publish gate fails.** Report which files are missing or which validation checks failed.
 - **HF auth, repo ID, revision, or local output path is missing.** Stop and ask.
-- **Target repo is dirty** (uncommitted changes). Do not generate or assemble a passport against modified deployment code.
 - **Training-repo commit SHA is unknown.** Do not guess — a passport built from guesses defeats the purpose.
+- **Passport tooling commit SHA is unknown.** Do not guess — the passport should record the autohpc commit that created it.
 
 ## What Not to Do
 

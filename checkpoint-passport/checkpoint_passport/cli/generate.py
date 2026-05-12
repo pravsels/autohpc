@@ -119,20 +119,15 @@ def _git_remote_url(repo: Path) -> Optional[str]:
         return None
 
 
-def _git_is_dirty(repo: Path) -> Tuple[bool, str]:
-    """Check if tracked files have uncommitted changes (ignores untracked files)."""
-    try:
-        r = subprocess.run(
-            ["git", "-C", str(repo), "status", "--porcelain"],
-            capture_output=True, text=True, timeout=10,
-        )
-        tracked_changes = "\n".join(
-            line for line in r.stdout.strip().splitlines()
-            if not line.startswith("??")
-        ).strip()
-        return bool(tracked_changes), tracked_changes
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return False, ""
+def _owning_git_repo(start: Path) -> Optional[Path]:
+    """Return the nearest parent git repo for a file/directory."""
+    current = start.resolve()
+    if current.is_file():
+        current = current.parent
+    for candidate in [current, *current.parents]:
+        if (candidate / ".git").exists():
+            return candidate
+    return None
 
 
 def _find_training_log(ckpt: Path) -> Optional[Path]:
@@ -619,7 +614,7 @@ def generate_passport(
         generated_at:   ISO 8601 timestamp; None = use current UTC time.
         resolve_remote_revisions: if True, call HF APIs to pin pretrained
                         asset and dataset commit SHAs.  Default is offline.
-        target_repo:    deployment repo — dirty tree is a hard error.
+        target_repo:    deployment repo — optional debug provenance.
         training_repo:  training repo — populates provenance commits.
         dataset_repos:  list of 'repo[@commit][:loader]' specs.
         loader_classes: parallel list of loader classes (prefer the
@@ -632,7 +627,7 @@ def generate_passport(
         fields left null).
 
     Raises:
-        ValueError: dirty target repo, etc.
+        ValueError: invalid generation inputs.
         FileNotFoundError: config or stats path doesn't exist on disk.
     """
     ckpt = checkpoint_dir.resolve()
@@ -662,14 +657,12 @@ def generate_passport(
         prov.training_repo = _git_remote_url(training_repo) or str(training_repo)
         prov.training_repo_commit = _git_head(training_repo)
 
+    passport_repo = _owning_git_repo(Path(__file__))
+    if passport_repo:
+        prov.passport_creation_repo = _git_remote_url(passport_repo) or str(passport_repo)
+        prov.passport_creation_repo_commit = _git_head(passport_repo)
+
     if target_repo:
-        dirty, dirty_files = _git_is_dirty(target_repo)
-        if dirty:
-            raise ValueError(
-                f"target repo {target_repo} has uncommitted changes:\n"
-                f"{dirty_files}\n"
-                "Refusing to generate passport against dirty deployment code."
-            )
         prov.deployment_repo = _git_remote_url(target_repo) or str(target_repo)
         prov.deployment_repo_commit = _git_head(target_repo)
 

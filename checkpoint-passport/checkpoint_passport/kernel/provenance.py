@@ -1,14 +1,9 @@
 """
-Provenance: format checks and deployment-repo binding verification.
+Provenance: format checks for debug/reproduction pointers.
 
 Format checks: pointers only, no deep validation. We check that strings
 look like valid commit shas and run-log paths but never network-resolve
 them or require the run log to exist on the machine doing the validation.
-
-Deployment repo binding: when a --target-repo path is provided and the
-passport declares provenance.deployment_repo_commit, we hard-fail if the
-repo HEAD doesn't match or the working tree is dirty. This catches code
-changes (adapter swaps, local patches) between signing and deployment.
 """
 
 from __future__ import annotations
@@ -44,7 +39,7 @@ def check_training_repo_commit_format(load: PassportLoadResult) -> Observation:
     if not commit:
         return Observation(
             check="training_repo_commit_format",
-            status=Status.SOFT_SIGNAL,
+            status=Status.FAIL,
             message="provenance.training_repo_commit not declared",
             details={"training_repo": pv.training_repo},
             category=CATEGORY,
@@ -53,7 +48,7 @@ def check_training_repo_commit_format(load: PassportLoadResult) -> Observation:
     if not _COMMIT_RE.match(commit):
         return Observation(
             check="training_repo_commit_format",
-            status=Status.SOFT_SIGNAL,
+            status=Status.FAIL,
             message=f"training_repo_commit {commit!r} does not look like a "
                     "git sha (7-40 hex chars)",
             details={"commit": commit, "training_repo": pv.training_repo},
@@ -64,6 +59,54 @@ def check_training_repo_commit_format(load: PassportLoadResult) -> Observation:
         status=Status.PASS,
         message=f"training_repo_commit format ok ({commit[:8]}...)",
         details={"commit": commit, "training_repo": pv.training_repo},
+        category=CATEGORY,
+    )
+
+
+def check_passport_creation_repo_commit_format(load: PassportLoadResult) -> Observation:
+    """`provenance.passport_creation_repo_commit` looks like a git sha.
+
+    This records the autohpc/tooling snapshot that produced the passport.
+    It is required provenance for debugging passport/schema/extractor bugs,
+    but it is not compared against the current checkout.
+    """
+    if not load.has_passport:
+        return _not_checked(
+            "passport_creation_repo_commit_format",
+            "no passport loaded",
+        )
+
+    pv = load.passport.provenance
+    commit = pv.passport_creation_repo_commit
+    if not commit:
+        return Observation(
+            check="passport_creation_repo_commit_format",
+            status=Status.FAIL,
+            message="provenance.passport_creation_repo_commit not declared",
+            details={"passport_creation_repo": pv.passport_creation_repo},
+            category=CATEGORY,
+        )
+
+    if not _COMMIT_RE.match(commit):
+        return Observation(
+            check="passport_creation_repo_commit_format",
+            status=Status.FAIL,
+            message=(
+                f"passport_creation_repo_commit {commit!r} does not look "
+                "like a git sha (7-40 hex chars)"
+            ),
+            details={
+                "commit": commit,
+                "passport_creation_repo": pv.passport_creation_repo,
+            },
+            category=CATEGORY,
+        )
+
+    return Observation(
+        check="passport_creation_repo_commit_format",
+        status=Status.PASS,
+        message=f"passport_creation_repo_commit format ok ({commit[:8]}...)",
+        details={"commit": commit, "passport_creation_repo": pv.passport_creation_repo},
         category=CATEGORY,
     )
 
@@ -159,12 +202,7 @@ def check_deployment_repo_commit(
     target_repo: Optional[Path] = None,
     require_signoff: bool = False,
 ) -> Observation:
-    """Hard-fail if the target repo HEAD or dirty state doesn't match the passport.
-
-    When ``require_signoff`` is True (production deploy path), a missing
-    ``deployment_repo_commit`` is promoted from soft-signal to hard fail so
-    the signer refuses to sign without it.
-    """
+    """Report deployment repo commit drift as debug context, not a load gate."""
     if not load.has_passport:
         return _not_checked("deployment_repo_commit", "no passport loaded")
 
@@ -172,17 +210,9 @@ def check_deployment_repo_commit(
     expected = pv.deployment_repo_commit
 
     if not expected:
-        # Missing deployment_repo_commit is only a hard fail when
-        # require_signoff is True AND a target_repo was provided to
-        # verify against.  Without a target_repo there's nothing to
-        # enforce — the operator didn't claim a deployment target.
-        if require_signoff and target_repo is not None:
-            status = Status.FAIL
-        else:
-            status = Status.SOFT_SIGNAL
         return Observation(
             check="deployment_repo_commit",
-            status=status,
+            status=Status.SOFT_SIGNAL,
             message="provenance.deployment_repo_commit not declared",
             details={"deployment_repo": pv.deployment_repo},
             category=CATEGORY,
@@ -198,18 +228,6 @@ def check_deployment_repo_commit(
         )
 
     if target_repo is None:
-        if require_signoff and expected:
-            return Observation(
-                check="deployment_repo_commit",
-                status=Status.FAIL,
-                message="passport declares deployment_repo_commit but no "
-                        "--target-repo was provided; pass --target-repo to verify",
-                details={
-                    "deployment_repo_commit": expected,
-                    "deployment_repo": pv.deployment_repo,
-                },
-                category=CATEGORY,
-            )
         return _not_checked(
             "deployment_repo_commit",
             "no --target-repo provided; cannot verify deployment_repo_commit",
@@ -218,7 +236,7 @@ def check_deployment_repo_commit(
     if not target_repo.is_dir():
         return Observation(
             check="deployment_repo_commit",
-            status=Status.FAIL,
+            status=Status.SOFT_SIGNAL,
             message=f"target repo path does not exist: {target_repo}",
             details={"target_repo": str(target_repo)},
             category=CATEGORY,
@@ -232,7 +250,7 @@ def check_deployment_repo_commit(
     except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
         return Observation(
             check="deployment_repo_commit",
-            status=Status.FAIL,
+            status=Status.SOFT_SIGNAL,
             message=f"could not run git in target repo: {exc}",
             details={"target_repo": str(target_repo)},
             category=CATEGORY,
@@ -241,7 +259,7 @@ def check_deployment_repo_commit(
     if head.returncode != 0:
         return Observation(
             check="deployment_repo_commit",
-            status=Status.FAIL,
+            status=Status.SOFT_SIGNAL,
             message=f"git rev-parse HEAD failed in {target_repo}: {head.stderr.strip()}",
             details={"target_repo": str(target_repo)},
             category=CATEGORY,
@@ -249,10 +267,37 @@ def check_deployment_repo_commit(
 
     actual_commit = head.stdout.strip()
 
-    dirty = subprocess.run(
-        ["git", "-C", str(target_repo), "status", "--porcelain"],
-        capture_output=True, text=True, timeout=10,
-    )
+    try:
+        dirty = subprocess.run(
+            ["git", "-C", str(target_repo), "status", "--porcelain"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+        return Observation(
+            check="deployment_repo_commit",
+            status=Status.SOFT_SIGNAL,
+            message=f"could not inspect target repo dirty state: {exc}",
+            details={
+                "expected_commit": expected,
+                "actual_commit": actual_commit,
+                "target_repo": str(target_repo),
+            },
+            category=CATEGORY,
+        )
+
+    if dirty.returncode != 0:
+        return Observation(
+            check="deployment_repo_commit",
+            status=Status.SOFT_SIGNAL,
+            message=f"git status failed in {target_repo}: {dirty.stderr.strip()}",
+            details={
+                "expected_commit": expected,
+                "actual_commit": actual_commit,
+                "target_repo": str(target_repo),
+            },
+            category=CATEGORY,
+        )
+
     dirty_files = "\n".join(
         line for line in dirty.stdout.strip().splitlines()
         if not line.startswith("??")
@@ -271,7 +316,7 @@ def check_deployment_repo_commit(
     if failures:
         return Observation(
             check="deployment_repo_commit",
-            status=Status.FAIL,
+            status=Status.SOFT_SIGNAL,
             message="deployment repo mismatch: " + "; ".join(failures),
             details={
                 "expected_commit": expected,
@@ -306,6 +351,7 @@ def _not_checked(name: str, reason: str) -> Observation:
 
 PASSPORT_CHECKS: List[Callable[..., Observation]] = [
     check_training_repo_commit_format,
+    check_passport_creation_repo_commit_format,
     check_run_log_path_format,
     check_deployment_repo_commit,
 ]

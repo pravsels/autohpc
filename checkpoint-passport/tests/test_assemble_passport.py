@@ -12,6 +12,8 @@ Verifies that assemble_passport correctly:
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -175,8 +177,39 @@ def test_no_training_log_no_provenance_crash(tmp_path):
         ckpt, seed, generated_at="2026-05-11T10:00:00Z",
     )
 
-    # No provenance section when there's nothing to populate
-    assert "provenance" not in passport or passport.get("provenance") is None or passport.get("provenance") == {}
+    provenance = passport["provenance"]
+    assert "run_log_path" not in provenance
+    assert provenance["passport_creation_repo_commit"]
+
+
+def test_dirty_target_repo_does_not_block_assembly(tmp_path):
+    ckpt = _make_checkpoint(tmp_path)
+    target_repo = _make_dirty_git_repo(tmp_path / "target")
+    seed = _minimal_seed()
+
+    passport = assemble_passport(
+        ckpt,
+        seed,
+        generated_at="2026-05-11T10:00:00Z",
+        target_repo=target_repo,
+    )
+
+    assert passport["provenance"]["deployment_repo_commit"]
+
+
+def test_training_repo_populates_training_commit(tmp_path):
+    ckpt = _make_checkpoint(tmp_path)
+    training_repo = _make_clean_git_repo(tmp_path / "training")
+    seed = _minimal_seed()
+
+    passport = assemble_passport(
+        ckpt,
+        seed,
+        generated_at="2026-05-11T10:00:00Z",
+        training_repo=training_repo,
+    )
+
+    assert passport["provenance"]["training_repo_commit"]
 
 
 # ── 5. Determinism ───────────────────────────────────────────────────────
@@ -192,6 +225,34 @@ def test_deterministic_with_pinned_timestamp(tmp_path):
     p2 = assemble_passport(ckpt, seed, generated_at="2026-05-11T10:00:00Z")
 
     assert json.dumps(p1, sort_keys=True) == json.dumps(p2, sort_keys=True)
+
+
+def _make_dirty_git_repo(path: Path) -> Path:
+    path = _make_clean_git_repo(path)
+    (path / "tracked.txt").write_text("dirty\n")
+    return path
+
+
+def _make_clean_git_repo(path: Path) -> Path:
+    path.mkdir()
+    subprocess.run(["git", "init"], cwd=path, check=True, capture_output=True)
+    (path / "tracked.txt").write_text("clean\n")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=path, check=True)
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "Test User",
+        "GIT_AUTHOR_EMAIL": "test@example.com",
+        "GIT_COMMITTER_NAME": "Test User",
+        "GIT_COMMITTER_EMAIL": "test@example.com",
+    }
+    subprocess.run(
+        ["git", "commit", "-m", "init"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        env=env,
+    )
+    return path
 
 
 # ── 6. Invalid seed rejection ────────────────────────────────────────────

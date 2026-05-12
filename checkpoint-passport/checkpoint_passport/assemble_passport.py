@@ -30,7 +30,7 @@ from checkpoint_passport.cli.generate import (
     _parse_wandb_url,
     _git_head,
     _git_remote_url,
-    _git_is_dirty,
+    _owning_git_repo,
 )
 
 
@@ -50,7 +50,7 @@ def assemble_passport(
         checkpoint_dir: root of the checkpoint tree.
         seed:           validated passport seed dict.
         generated_at:   ISO 8601 timestamp; None = use current UTC time.
-        target_repo:    deployment repo — dirty tree is a hard error.
+        target_repo:    deployment repo — optional debug provenance.
         training_repo:  training repo — populates provenance commits.
         extra_skip_files: filenames to exclude from weight_integrity hashing.
         extra_skip_dirs:  top-level directory names to exclude from hashing.
@@ -59,7 +59,7 @@ def assemble_passport(
         Complete passport dict ready for JSON serialization.
 
     Raises:
-        ValueError: dirty target repo, invalid seed, etc.
+        ValueError: invalid seed, etc.
         FileNotFoundError: checkpoint_dir doesn't exist.
     """
     ckpt = checkpoint_dir.resolve()
@@ -107,14 +107,16 @@ def assemble_passport(
         if commit:
             provenance["training_repo_commit"] = commit
 
+    passport_repo = _owning_git_repo(Path(__file__))
+    if passport_repo:
+        provenance["passport_creation_repo"] = (
+            _git_remote_url(passport_repo) or str(passport_repo)
+        )
+        commit = _git_head(passport_repo)
+        if commit:
+            provenance["passport_creation_repo_commit"] = commit
+
     if target_repo:
-        dirty, dirty_files = _git_is_dirty(target_repo)
-        if dirty:
-            raise ValueError(
-                f"target repo {target_repo} has uncommitted changes:\n"
-                f"{dirty_files}\n"
-                "Refusing to assemble passport against dirty deployment code."
-            )
         provenance["deployment_repo"] = _git_remote_url(target_repo) or str(
             target_repo
         )
