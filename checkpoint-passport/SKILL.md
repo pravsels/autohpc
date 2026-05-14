@@ -111,20 +111,8 @@ When passporting multiple checkpoints, do them one at a time. Before starting ea
 
 #### Step 1: Extract Passport Seed
 
-Run inside the **OpenPI runtime environment** (not a generic Python). If imports fail, stop and report the missing module.
-
-**Config-level extraction only (no GPU needed):**
-
-```bash
-extract-passport-seed openpi \
-  --checkpoint-dir <ckpt> \
-  --out <ckpt>/PASSPORT_SEED.json \
-  --openpi-config-name <name> \
-  --default-prompt "<prompt>" \
-  --resize-size 224
-```
-
-**With runtime enrichment + reference test vector (requires GPU):**
+Run inside the **OpenPI runtime environment** (not a generic Python). Production
+signing requires runtime enrichment and a real reference vector:
 
 ```bash
 extract-passport-seed openpi \
@@ -139,16 +127,6 @@ extract-passport-seed openpi \
   --reference-start-frame <frame> \
   --reference-num-frames 10
 ```
-
-When `--device` is provided, the extractor loads the model via the internal RuntimeAdapter protocol and collects:
-- Library versions (Python, JAX, torch, OpenPI)
-- Parameter count (via `flax.nnx` for JAX, fallback to PyTorch)
-- Smoke inference (one forward pass through `policy.infer()`)
-
-When `--reference-dataset-path` is also provided, the extractor loads real consecutive frames from the dataset and writes:
-- `assets/reference_test_vector/input_states.npy` — state vectors
-- `assets/reference_test_vector/images/<camera>_<frame>.png` — image frames
-- Hashes for all reference files in the seed
 
 **The reference test vector is required for signing.** Do not skip it. Do not substitute synthetic data for production passports. Do not write a separate dataset sampling script — the checked-in extractor command is the only valid path.
 
@@ -165,11 +143,12 @@ assemble-passport \
   --target-repo <deployment_repo_path>
 ```
 
-The assembler reads the seed, hashes all checkpoint files for `weight_integrity`, populates `provenance` from git state, attaches metadata (`schema_version`, `generated_at`, `generated_by`), and writes `MODEL_PASSPORT.json`.
+The assembler reads the seed, hashes checkpoint files for `weight_integrity`,
+populates provenance from git state, and writes `MODEL_PASSPORT.json`.
 
 `--training-repo` is required for signable passports. `--target-repo` is optional debug context and must not be treated as a load gate.
 
-Use `--skip-dir retain` (repeatable) to exclude training artifacts from hashing. `generate-passport` also accepts `--skip-dir` and `--skip-file` for the same purpose.
+Use `--skip-dir retain` (repeatable) to exclude training artifacts from hashing.
 
 ## Validate
 
@@ -278,6 +257,10 @@ summary and wait if anything is surprising:
 - file count and total size from the stage manifest / `du -sh`
 - confirmation that `README.md` includes W&B links when available
 
+Package mode is inferred from what you staged: if the package contains final
+params/inference weights and no `train_state`/optimizer state, report
+`params-only`.
+
 Never expose tokens in commands, logs, or status updates. Do not `cat` token
 files or inline `hf_...` values in visible commands. Read tokens into environment
 variables inside the remote shell, or use the authentication mechanism provided
@@ -334,7 +317,7 @@ Stop and ask the user when:
 - **Training-repo commit SHA is unknown.** Do not guess — a passport built from guesses defeats the purpose.
 - **Passport tooling commit SHA is unknown.** Do not guess — the passport should record the autohpc commit that created it.
 
-## What Not to Do
+## Hard Rules
 
 - Do not write a small config script to produce a fake `config.json` for OpenPI. Its contract is runtime-constructed.
 - Do not discover environments by probing. If the right environment is not active, stop and ask.
@@ -346,26 +329,3 @@ Stop and ask the user when:
 - Do not sign with skipped hard sections for production checkpoints.
 - Do not treat missing `reference_test_vector` as acceptable — fix the extraction.
 - Do not block signing on missing dataset commits when repo IDs are present. That is optional provenance.
-
-## Quick Reference
-
-| Step | Path A (config-bearing) | Path B (OpenPI) |
-|------|------------------------|-----------------|
-| Install | `uv pip install -e <autohpc>/checkpoint-passport` | same |
-| Generate / Extract | `generate-passport <ckpt> --config ...` | `extract-passport-seed openpi --checkpoint-dir <ckpt> --openpi-config-name <name> --device cuda --reference-dataset-path <ds> ...` |
-| Assemble | (not needed) | `assemble-passport --checkpoint-dir <ckpt> --seed <ckpt>/PASSPORT_SEED.json` |
-| Validate | `validate-checkpoint <ckpt>` | same |
-| Sign | `sign-checkpoint <ckpt> --reason '...'` | same |
-| Stage package | `publish-checkpoint stage --out <publish_dir> --file ... --dir ...` | same |
-| Publish gate | `check-publish-ready <publish_dir>` | same |
-| Upload | `publish-checkpoint upload --publish-dir <publish_dir> --repo-id ...` | same |
-| Download | `publish-checkpoint download --repo-id ... --out ...` | same |
-| Deployment gate | `validate-checkpoint <ckpt> --require-signoff` | same |
-
-## After Signing
-
-Once the checkpoint has a passing signoff, the passport's job is done. The next steps depend on the goal:
-
-- **Evaluate the checkpoint** — follow `eval-tracking/SKILL.md`.
-- **Deploy to a robot or inference rig** — follow `deployment-protocol/SKILL.md`.
-- **Full triage** — return to the root README's "Checkpoint triage" section.

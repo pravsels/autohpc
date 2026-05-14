@@ -108,10 +108,11 @@ srun --ntasks=1 --cpu-bind=cores apptainer exec \
   --bind "/scratch/<project>/<user>:/scratch/<project>/<user>" \
   --bind "/home/<project>/<user>:/home/<project>/<user>" \
   "/scratch/<project>/<user>/<repo>/container/<sif_file>" \
-  bash -c "export WANDB_API_KEY=<key> && python -m wandb sync --project <project_name> <path/to/offline-run-dir>"
+  bash -c 'export WANDB_API_KEY="$(cat ~/.wandb_key)" && python -m wandb sync --project <project_name> <path/to/offline-run-dir>'
 ```
 
 Use `--project` (or the legacy `--override project=<name>`) to control which W&B project receives the run.
+Do not inline API keys in commands or logs; read them from a private token file inside the remote shell.
 
 ## Notes
 

@@ -81,17 +81,7 @@ templates and caveats.
 
 The `slurm/` directory in the target repo is only for training and eval sbatch scripts. Do not create helper scripts, wrapper scripts, preflight scripts, or promotion scripts there.
 
-The deployment workflow is simple:
-
-1. Push code changes to GitHub.
-2. Pull the repo on the HPC.
-3. Upload the container image and any datasets to the HPC.
-4. Submit the training job with `sbatch`.
-5. Monitor, debug with `srun`, collect results.
-
-Run SSH commands yourself — do not ask the user to run them for you. Request `all` permissions so you can access the user's SSH config and certificates. Only fall back to asking the user if SSH fails after that (e.g. expired certificate).
-
-Open an SSH ControlMaster connection at the start and reuse it for all subsequent commands:
+Run SSH commands yourself and reuse a ControlMaster connection:
 
 ```bash
 export SSH_CTRL="/tmp/ssh-ctrl-%r@%h:%p"
@@ -99,15 +89,6 @@ ssh -fNM -o ControlPath="$SSH_CTRL" "$SSH_ALIAS"            # open once
 ssh -o ControlPath="$SSH_CTRL" "$SSH_ALIAS" "<command>"      # reuse for each command
 ssh -o ControlPath="$SSH_CTRL" -O exit "$SSH_ALIAS"          # close when done
 ```
-
-1. Set `SSH_ALIAS`, `UNIX_USER`, `PROJECT_NAME`, `PROJECT_CODE`, `PROJECT_DIR`, `SCRATCH_DIR`.
-2. Open ControlMaster connection to `SSH_ALIAS`.
-3. Push code to GitHub, pull on HPC.
-4. Upload container image and datasets to HPC scratch.
-5. Submit training with `sbatch slurm/<training_script>.sh`. Use `srun` for debugging.
-6. Pause for confirmation on high-impact actions (`scancel`, overwrite sync, destructive cleanup).
-7. Never inline secrets; use hidden prompt input or secure env handling.
-8. Enable observability: live logs, job accounting, and required W&B tracking.
 
 ### Worktrees for multi-experiment setups
 
@@ -166,87 +147,34 @@ A training sbatch script should be short and linear. Before writing one, check t
 
 **All config changes go through git.** When changing training parameters (batch size, learning rate, etc.), edit the config file in the repo, commit, push, pull on HPC, then submit. Do not use `--export` env var overrides or rsync individual files — that breaks the "push code, pull on HPC, submit" workflow and makes runs unreproducible.
 
-### Template
+### Sbatch Skeleton
 
-Base your sbatch scripts on this structure. Adapt paths, bind mounts, container runtime, and the training command to the target repo. Check `cluster-profiles/<cluster_name>.md` for cluster-specific details (path layout, modules, container runtime).
+Use existing repo scripts first. If writing one, keep it short:
 
 ```bash
 #!/bin/bash
 #SBATCH --job-name=<project>-<task>
-#SBATCH --nodes=1
 #SBATCH --gpus=1
-#SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
-# For full-node jobs (all GPUs), use --mem=0G and --exclusive.
-# For single-GPU jobs, set --mem to what you need and remove --exclusive.
-#SBATCH --mem=0G
-#SBATCH --exclusive
 #SBATCH --time=1-00:00:00
 #SBATCH --output=slurm-%j.out
 #SBATCH --error=slurm-%j.err
-#SBATCH --requeue
 
 set -e
+module purge
+module load <container_module>
 
-# Load cluster modules (check cluster profile for specifics).
-# module purge
-# module load <container_module>
-
-# Paths — repo on home, everything heavy on scratch.
-home_dir="/home/<project_code>/<username>"
+repo_dir="/home/<project_code>/<username>/<project>"
 scratch_dir="/scratch/<project_code>/<username>"
-repo_dir="${home_dir}/<project>"
-data_dir="${scratch_dir}/<project>"
-container="${data_dir}/container/<image>.sif"
-HF_CACHE="${scratch_dir}/huggingface_cache"
-WANDB_DIR="${data_dir}"
-WANDB_CACHE_DIR="${data_dir}/wandb_cache"
-WANDB_CONFIG_DIR="${data_dir}/wandb_config"
+container="${scratch_dir}/<project>/container/<image>.sif"
+config="${repo_dir}/<path/to/config.yaml>"
+dataset="${scratch_dir}/<project>/<dataset>"
 
-# Training config — use REPO_DIR, not SCRIPT_DIR (Slurm copies scripts to spool).
-CONFIG_FILE="${repo_dir}/<path/to/config.yaml>"
-DATASET_PATH="${data_dir}/<dataset_file>"
-CHECKPOINT_DIR="${data_dir}/checkpoints"
-
-mkdir -p "${HF_CACHE}" "${WANDB_CACHE_DIR}" "${WANDB_CONFIG_DIR}" "${CHECKPOINT_DIR}"
-
-start_time="$(date -Is --utc)"
-echo "===================================="
-echo "Job ID: ${SLURM_JOB_ID}"
-echo "Node: ${SLURM_NODELIST}"
-echo "Started (UTC): ${start_time}"
-echo "===================================="
-
-TRAIN_CMD="python <entry_point> \
-    --config ${CONFIG_FILE} \
-    --dataset ${DATASET_PATH} \
-    --checkpoint-dir ${CHECKPOINT_DIR}"
-
-set +e
 apptainer exec --nv \
-    --pwd "${repo_dir}" \
-    --bind "${scratch_dir}:${scratch_dir}" \
-    --bind "${HF_CACHE}:/root/.cache/huggingface" \
-    --env "HF_HOME=/root/.cache/huggingface" \
-    "${container}" \
-    bash -c "export WANDB_DIR=${WANDB_DIR} WANDB_CACHE_DIR=${WANDB_CACHE_DIR} WANDB_CONFIG_DIR=${WANDB_CONFIG_DIR} && \
-        ${TRAIN_CMD}"
-EXIT_CODE=$?
-set -e
-
-end_time="$(date -Is --utc)"
-echo ""
-echo "===================================="
-echo "Started (UTC):  ${start_time}"
-echo "Finished (UTC): ${end_time}"
-echo "Exit Code: ${EXIT_CODE}"
-echo "===================================="
-
-if [ ${EXIT_CODE} -ne 0 ]; then
-    echo "ERROR: Training failed with exit code ${EXIT_CODE}"
-    echo "Check slurm-${SLURM_JOB_ID}.err for details"
-    exit ${EXIT_CODE}
-fi
+  --pwd "${repo_dir}" \
+  --bind "${scratch_dir}:${scratch_dir}" \
+  "${container}" \
+  python <entry_point> --config "${config}" --dataset "${dataset}"
 ```
 
 ## Quick Reference
@@ -255,7 +183,7 @@ fi
 |---|---|
 | Login | `ssh <ssh_alias>` |
 | Submit | `sbatch <slurm_script>.sh` |
-| Submit profile | `sbatch <slurm_script>.sh <profile>` |
+| Submit profile | `sbatch <slurm_script>.sh <profile>` only when the checked-in script documents that positional profile argument |
 | Queue by user | `squeue -u <unix_user>` |
 | Watch queue | `watch -n 1 squeue -u <unix_user>` |
 | Tail job logs | `tail -f slurm-<job_id>.out` and `tail -f slurm-<job_id>.err` |
@@ -269,38 +197,9 @@ fi
 | Interactive debug shell | `srun --gpus=1 --time=00:30:00 --pty /bin/bash` |
 | Scratch usage | `du -sh <scratch_dir>` and `du -h --max-depth=1 <scratch_dir> \| sort -hr` |
 
-## Implementation Example
-
-```bash
-export SSH_ALIAS="<your_cluster_alias>"
-export UNIX_USER="${UNIX_USER:-$(whoami)}"
-export PROJECT_NAME="<project_name>"
-export PROJECT_CODE="<project_code>"
-export PROJECT_DIR="$HOME/${PROJECT_NAME}"
-export SCRATCH_DIR="/scratch/${PROJECT_CODE}/${UNIX_USER}/${PROJECT_NAME}"
-
-# 1. Pull latest code on HPC
-ssh "$SSH_ALIAS" "cd $PROJECT_DIR && git pull"
-
-# 2. Upload container artifact (already built/converted locally)
-rsync -avP <image>.sif "$SSH_ALIAS:$SCRATCH_DIR/"
-
-# 3. Submit training
-ssh "$SSH_ALIAS" "cd $PROJECT_DIR && sbatch slurm/<training_script>.sh"
-
-# 4. Monitor
-ssh "$SSH_ALIAS" "squeue -u $UNIX_USER"
-ssh "$SSH_ALIAS" "tail -f $PROJECT_DIR/slurm-<job_id>.out"
-```
-
-Private repo auth: do not embed PAT in URL.
-
 ## Observability Guidance
 
-### Training health checks
-
-**Queue status and GPU usage are not sufficient to verify training is healthy.** A job can show `RUNNING` in `squeue` and have active GPU memory in `nvidia-smi` while being completely stuck — deadlocked on I/O, hung on a collective, or spinning in an infinite retry loop. You must check the actual training output.
-
+Queue status and GPU usage are not sufficient to verify training is healthy.
 When monitoring a running job, check in this order:
 
 1. **`slurm-<job_id>.out` — is the training loop advancing?** Tail the output log and look for step counts and loss values. If steps are advancing and loss is being logged, training is alive. If the last logged step was hours ago, training is stuck.
@@ -308,14 +207,12 @@ When monitoring a running job, check in this order:
 3. **Disk usage — is there room for checkpoints?** A full filesystem silently deadlocks checkpoint writes. The training loop may continue computing steps but hang when the checkpoint thread blocks on disk I/O. Check usage with `du -sh <checkpoint_dir>` and compare against the filesystem's quota (see cluster profile for quota commands).
 4. **GPU telemetry — is the GPU doing work?** `nvidia-smi` confirms the GPU is allocated and has processes, but doesn't distinguish productive training from a deadlocked process holding GPU memory. Only useful as a first sanity check, not as proof of progress.
 
-A healthy training job shows: recent step numbers in `.out`, no errors in `.err`, disk not near quota, and GPU utilization >0%. All four must be true.
+A healthy training job shows recent step numbers, no errors, disk not near quota,
+and GPU utilization >0%. Capture `sacct`/`seff` summaries after completion when
+available.
 
-### Post-run accounting
-
-- Capture `sacct`/`seff` summaries for memory, runtime, and exit status.
-- W&B tracking is required for training runs.
-- Prefer offline-first logging on restricted clusters, then sync later.
-- Never inline `WANDB_API_KEY`; pass via secure environment setup.
+W&B tracking is required for training runs. Prefer offline-first logging on
+restricted clusters, then sync later. Never inline `WANDB_API_KEY`.
 
 ## Common Mistakes
 

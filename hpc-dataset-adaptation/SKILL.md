@@ -7,39 +7,33 @@ description: Use when the user's dataset format differs from what the target rep
 
 ## Overview
 
-Use this when the user has their own dataset and the target repo's existing loaders don't read it directly.
-Core principle: adapt the code to read the data as-is. Do **not** convert or copy large datasets into a different format.
+Use when the target repo's loader does not read the user's dataset directly.
+Adapt code to read the data as-is; do not bulk-convert or copy large datasets
+unless the user explicitly asks.
 
 ## When to Use
 
-- User's data has a different schema, layout, or file format than what the repo expects
-- User's data is large enough that copying or converting is impractical
-- Training smoke tests pass with repo demo data but need to work with user data too
+- User data has a different schema, layout, or file format than the repo expects.
+- Training works on demo/repo data but not on the user's data.
+- The dataset is too large to casually copy or rewrite.
 
-## When to Skip
-
-- User is training on the repo's own provided data
-- User's data already matches the repo's expected format
+Skip this if the data already matches the repo's expected format.
 
 ## Agent Algorithm
 
-Follow this order; do not convert large datasets unless the user explicitly asks.
-
 1. **Preflight**
-   - Confirm the target repo's normal training smoke test works with its expected
-     data or demo data.
-   - Identify the user's dataset path and the container/runtime where training
-     will run.
+   - Confirm the repo's normal training smoke test works with expected/demo data.
+   - Identify the user's dataset path and the container/runtime used for training.
 
 2. **Inspect actual data inside the container**
-   - Use native libraries for the file format to record keys, shapes, dtypes,
-     lengths, cameras/modalities, state/action layout, and timestamps.
+   - Use native libraries for the format to record keys, shapes, dtypes, lengths,
+     modalities, state/action layout, and timestamps.
    - Save or paste a small schema summary; do not copy or rewrite the dataset.
 
 3. **Inspect expected loader contract**
    - Read the repo's dataset classes/configs.
-   - Identify expected keys, shapes, dtype, normalization, sequence/window
-     conventions, and language/action/state mappings.
+   - Identify expected keys, shapes, dtype, normalization, windowing, and
+     language/action/state mappings.
 
 4. **Map the gap**
    - Write the mapping from user fields to expected fields.
@@ -51,33 +45,31 @@ Follow this order; do not convert large datasets unless the user explicitly asks
    - Register it through the repo's normal config mechanism.
 
 6. **Verify**
-   - Instantiate the loader inside the container and fetch one or more samples.
-   - Assert keys/shapes/dtypes and run a small training smoke test with the real
-     entry point.
-   - Record evidence in the run log before proceeding to full training.
-
-## Core Pattern
-
-1. **Inspect the user's dataset inside the container.** Use the container's installed tools (e.g. `h5py`, `numpy`, `pandas`) to examine file structure, keys, shapes, and dtypes. Do not install inspection tools on the host.
-2. **Inspect the repo's existing data loaders.** Read the dataset classes and configs to understand the expected schema — what keys, shapes, and structure the training code consumes.
-3. **Map the gap.** Identify which fields in the user's data correspond to which expected inputs, what's missing, and what needs renaming or reshaping.
-4. **Write a loader or adapter in the target repo.** Create a new dataset class that reads the user's format directly and outputs the data structures the training code expects. Register it alongside existing dataset options.
-5. **Validate the loader independently.** Instantiate the new dataset class inside the container and verify it returns correctly shaped and typed outputs before running training.
-6. **Smoke test training end-to-end.** Run training inside the container (`--gpus all`, small batch, few steps) with the user's actual data. The same entry point and config structure as the repo's standard training path.
+   - Instantiate the loader inside the container and fetch samples.
+   - Assert keys, shapes, and dtypes.
+   - Run a small training smoke test with the real entry point.
+   - Record evidence before proceeding to full training.
 
 ## Quick Reference
 
 | Goal | Approach |
 |---|---|
-| Inspect dataset schema | Use the format's native Python library inside the container to walk structure, keys, shapes, dtypes |
-| Find existing loaders | Search for dataset classes in the target repo (`Dataset`, `DataLoader`, config files) |
-| Validate new loader | Instantiate dataset, fetch one sample, print keys and shapes |
-| Smoke test training | Same training command as Phase 1 but pointing at user's data path |
+| Inspect dataset schema | Use native Python library inside the container |
+| Find expected loader | Read dataset classes and config files |
+| Validate adapter | Instantiate dataset, fetch sample, assert keys/shapes/dtypes |
+| Smoke test training | Same entry point with small batch/few steps |
+
+## Stop Gates
+
+- Dataset path unavailable inside the container.
+- Required modality/key is missing or semantically ambiguous.
+- Loader sample does not match expected shape/dtype.
+- Training smoke test fails.
 
 ## Common Mistakes
 
-- Converting or copying large datasets instead of writing a loader
-- Inspecting data on the host instead of inside the container
-- Writing a loader that loads entire episodes/trajectories into memory at once for large datasets
-- Forgetting to register the new dataset class and config so training can select it
-- Testing the loader in isolation but skipping an actual training step with it
+- Converting/copying large datasets instead of writing a loader.
+- Inspecting data on the host instead of inside the container.
+- Loading whole trajectories into memory for large datasets.
+- Forgetting to register the loader/config.
+- Testing the loader but skipping a training step.

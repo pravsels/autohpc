@@ -149,16 +149,17 @@ Include at minimum:
 
 ### Updating a run log
 
-When checking on a job, verify it is actually making progress — not just running. A running process with GPU activity can still be deadlocked. Check the training output log for advancing step counts and the error log for failures before recording status. On Slurm, check `slurm-<job_id>.out` and `.err`. On cloud VMs, check the persisted log file (e.g. `train.log`) or `docker logs`. Append to the **Status** section:
+When checking on a job, append evidence-backed entries to **Status**. A running
+process with GPU activity is not proof of progress; check logs for advancing
+steps/metrics and errors before recording health.
 
 ```markdown
 ## Status
 - 2026-03-11 15:00 — running, step 2400, train_loss 0.085
-- 2026-03-11 18:00 — running, step 28000, train_loss 0.041
 - 2026-03-12 14:30 — completed, exit code 0
 ```
 
-When the job finishes, fill in **Results**:
+When the job finishes, fill in **Results** and **W&B**:
 
 ```markdown
 ## Results
@@ -171,28 +172,16 @@ When the job finishes, fill in **Results**:
 - loss_one_liner: <one-sentence qualitative summary of the loss progression>
 - checkpoint: `<path to checkpoint on remote storage>`
 - config_snapshot: `<path to resolved config from run output>`
-```
 
-When archiving a checkpoint, include the exact config snapshot from the run output, not a reference to the repo config file — repo configs are mutable and may not match what actually produced the checkpoint.
-
-The `loss_one_liner` should be a brief human-readable takeaway, not a restatement of numbers. Examples:
-
-```markdown
-- loss_one_liner: Train loss dropped steadily from 0.82 to 0.10; val loss flat at 0.15, likely plateaued.
-- loss_one_liner: Both losses decreased healthily with no sign of overfitting.
-- loss_one_liner: Train loss decreased but val loss crept up after step 20k — overfitting.
-- loss_one_liner: Loss metrics were not logged for this run.
-```
-
-And fill in the **W&B** section. Record the local offline dir immediately, then add the synced URL after running `wandb sync`:
-
-```markdown
 ## W&B
 - local: `wandb/offline-run-20260311_150000-abc123`
 - synced: `https://wandb.ai/team/project/runs/abc123`
+- notes: <brief qualitative read of the curves>
 ```
 
-The synced link is a clickable URL to the W&B dashboard where training dynamics (loss curves, metrics, system stats) can be inspected. If not yet synced, leave it as `pending — run wandb sync <local>`.
+Use the exact config snapshot from the run output; repo config files can drift.
+Make `loss_one_liner` a human-readable takeaway, not a restatement of numbers.
+If W&B is not yet synced, write `pending — run wandb sync <local>`.
 
 ### W&B sync
 
@@ -216,18 +205,7 @@ If sync fails with "No API key configured", ask the user to place their key in a
 
 When a run log has multiple job blocks (original + resumptions), record the synced URL in each job block it belongs to, not only in the W&B section at the bottom. This way you can find the right dashboard from whichever block you're reading without scrolling.
 
-After syncing, review the dashboard with the user and add a `notes` field — a brief qualitative read of how training went. This is subjective and best written together. Examples:
-
-```markdown
-- notes: loss drops steadily, no plateau, looks healthy
-- notes: loss plateaued around step 40k, minimal improvement after that
-- notes: loss unstable in first 5k steps then settled, final value reasonable
-- notes: val_loss diverged from train_loss around step 20k, possible overfitting
-```
-
-The point is that months later, you (or someone else) can open the log and get the takeaway without re-opening the dashboard.
-
-And suggest next steps in **Next**:
+Suggest next steps in **Next**:
 
 ```markdown
 ## Next
@@ -274,21 +252,11 @@ Each experiment run should be on its own git branch or tagged commit so you can 
 
 ## Publishing Checkpoints
 
-When checkpoints are worth sharing or backing up, upload to HuggingFace. Confirm with the user whether to upload params only (sufficient for inference and fine-tuning) or the full checkpoint including train state (needed to resume training, but 2-3x larger).
+When a checkpoint is worth sharing or backing up, follow
+`checkpoint-passport/SKILL.md` first. Do not upload, copy, eval, or hand off a
+checkpoint before `MODEL_PASSPORT.json` and `SIGNOFF.json` exist and validate.
 
-### Passport first, then upload
-
-**The passport is a hard prerequisite for HF upload, even when HF is being used as a glorified `scp`** (e.g. uploading to download on an eval box). Once a checkpoint exists on HF without a `MODEL_PASSPORT.json` / `SIGNOFF.json`, the snapshot is permanently unsigned and any cached copies people made in the interim never get a passport. Passport-then-upload closes that hole.
-
-Before any `huggingface-cli upload`, follow `checkpoint-passport/SKILL.md` (in this repo) to generate `MODEL_PASSPORT.json` and `SIGNOFF.json` at the checkpoint root. Both files travel with the upload as part of the standard layout below.
-
-### What to include
-
-The repo should contain everything needed to use the checkpoint, and ideally enough to replicate the training:
-
-- **Inference:** model weights (params) + assets needed at load time (e.g. norm stats). Someone should be able to download and run inference without anything else.
-- **Replication:** dataset list, valid indices, training config — enough to reproduce the run from scratch.
-- **Resuming training:** full checkpoint including optimizer/EMA state. Much larger, so confirm with the user whether this is needed.
+The public package normally contains:
 
 ```
 README.md                    # Model card: description, config, loss table, usage
@@ -297,22 +265,9 @@ MODEL_PASSPORT.json          # Feeding contract + integrity manifest (generated 
 SIGNOFF.json                 # Verdict + sha256 of passport and weight files (generated by sign-checkpoint)
 assets/                      # Norm stats, dataset list, valid indices, etc.
 checkpoints/<step>/params/   # Model weights (inference + fine-tuning)
-checkpoints/<step>/train_state/  # Optional: optimizer/EMA state (resume training)
 ```
-
-### Sanitized training log
 
 Create `TRAINING_LOG.md` from the run log, stripped of cluster-specific details: Slurm job IDs, node names, scratch paths, `wandb_id.txt` references. Keep the training dynamics, config, loss progression, and W&B link.
-
-### Checkpoint integrity
-
-Hashes are produced by `sign-checkpoint` (see `checkpoint-passport/SKILL.md`) and live in `SIGNOFF.json` at the checkpoint root, alongside the verdict. The signer hashes the passport plus every file the passport's `weight_integrity.weight_files[]` declares (safetensors, `config.json`, norm stats, tokenizer files — everything loaded at inference). Downstream consumers verify with:
-
-```bash
-validate-checkpoint <ckpt_dir> --require-signoff
-```
-
-Non-zero exit = do not load this checkpoint. Don't roll your own `sha256sum | sha256sum` manifest in the README — it loses the verdict, the per-file breakdown, and the contract semantics that the passport pipeline gives you.
 
 ### W&B visibility
 
