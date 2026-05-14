@@ -36,7 +36,7 @@ user. Wait for confirmation before continuing.
 - `hpc-dataset-adaptation/SKILL.md` — adapt code to the user's dataset format.
 - `hpc-training-operations/SKILL.md` — Slurm submission, monitoring, and debugging.
 - `hpc-run-tracking/SKILL.md` — per-run training logs.
-- `checkpoint-passport/` — `MODEL_PASSPORT.json` / `SIGNOFF.json` tooling and workflow.
+- `checkpoint-passport/SKILL.md` — canonical `MODEL_PASSPORT.json` / `SIGNOFF.json` tooling and workflow.
 - `eval-tracking/SKILL.md` — per-eval logs and promotion notes.
 - `deployment-protocol/` — first-run deployment preflight on robot or inference rig.
 - `cluster-profiles/` — cluster-specific docs and caveats.

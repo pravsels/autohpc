@@ -623,8 +623,8 @@ def generate_passport(
         extra_skip_dirs:  top-level directory names to exclude from hashing.
 
     Returns:
-        A fully populated ModelPassport (Phase 1 fields filled, Phase 2
-        fields left null).
+        A ModelPassport populated from static checkpoint metadata. Runtime-only
+        fields remain null unless provided by a supported runtime extraction path.
 
     Raises:
         ValueError: invalid generation inputs.
@@ -756,14 +756,14 @@ def generate_passport(
 #   - JSON serialization and summary output
 #
 # All business logic lives in generate_passport() so it can be called
-# from tests, other CLIs (materialize, merge), and agent toolchains
+# from tests, other CLIs, and agent toolchains
 # without subprocess overhead.
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="generate-passport",
-        description="Generate MODEL_PASSPORT.json from checkpoint files (Phase 1 static extraction)",
+        description="Generate MODEL_PASSPORT.json for config-bearing checkpoints",
     )
     parser.add_argument("checkpoint_dir", type=Path)
     parser.add_argument(

@@ -24,6 +24,10 @@ All three use the same run log format. Experiments add a comparison summary.
 - Resuming a run after walltime interruption
 - Comparing experiment results to decide what to try next
 
+## Cluster Access
+
+When checking remote run status, use the cluster profile and try direct SSH yourself before asking the user for command output. For Isambard, the user may already have run `clifton auth`; try `ssh isambard "<command>"` first and only ask the user to refresh Clifton auth after a current SSH attempt fails.
+
 ## Run Logs
 
 Run logs live in `run_logs/` in the target repo. One markdown file per run.

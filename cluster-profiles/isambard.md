@@ -1,35 +1,35 @@
 # Isambard Cluster Profile
 
-## Prerequisites — do this before proceeding
+## SSH Access
 
-Create the following as always-on agent rules in the **target repo** (if they don't already exist). Use whatever mechanism the user's editor supports (e.g. `.cursor/rules/` for Cursor, `CLAUDE.md` for Claude Code, etc.). These carry operational gotchas that must persist across sessions.
-
-**Isambard SSH auth:** When SSH to Isambard fails with "Permission denied (publickey)" or "Connection closed by remote host", do not retry. Clifton auth certificates expire every 12 hours. Ask the user to run `clifton auth` and wait before retrying.
+Isambard uses signed SSH certificates via a CLI tool called Clifton. Certificates are valid for **12 hours**.
 
 ## Authoritative Resources
 
 - User documentation: [https://docs.isambard.ac.uk/](https://docs.isambard.ac.uk/)
 - SSH and login: [https://docs.isambard.ac.uk/guides/login/](https://docs.isambard.ac.uk/guides/login/)
 
-## SSH Access
+Before assuming SSH is unavailable, try the configured local SSH alias first:
 
-Isambard uses signed SSH certificates via a CLI tool called Clifton. Certificates are valid for **12 hours**.
+```
+ssh isambard "<command>"
+```
 
-Before any SSH operation (preflight, upload, job submission), the user must run:
+The user may already have run:
 
 ```
 clifton auth
 ```
 
-This opens a browser for authentication and writes a certificate to `~/.ssh/`. If the certificate has expired, SSH will fail with `Permission denied (publickey)`.
+`clifton auth` opens a browser for authentication and writes a certificate to `~/.ssh/`. If the certificate has expired, SSH will fail with `Permission denied (publickey)` or `Connection closed by remote host`.
 
-After auth, connect with:
+If a current SSH attempt fails with those errors, do not keep retrying. Tell the user the exact command attempted, ask them to run `clifton auth`, then retry after they confirm.
+
+The direct Isambard hostname form is:
 
 ```
 ssh <PROJECT_ID>.aip2.isambard
 ```
-
-The agent cannot run `clifton auth` — if SSH fails, ask the user to run it and retry.
 
 ## Hardware
 

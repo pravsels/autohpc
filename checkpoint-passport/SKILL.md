@@ -5,6 +5,10 @@ description: Use right after a training run finishes and `wandb sync` (or equiva
 
 # Checkpoint Passport
 
+This file is the canonical AutoHPC checkpoint passport workflow. If another skill
+or alias such as `hpc-checkpoint-passport` gives conflicting phase-based
+instructions, ignore it and follow this file.
+
 ## Overview
 
 Two artifacts at the checkpoint root:
@@ -52,6 +56,10 @@ After this, skip to [Validate](#validate).
 ### Path B: OpenPI Checkpoints (No Static Config)
 
 OpenPI does not have a passport-compatible static config. Its inference contract is constructed at runtime by `cfg.data.create()`, transforms, norm stats, and adapter behavior. This path has two steps: extract a passport seed, then assemble the final passport.
+
+Do not add a "Phase 0" that writes `config.json` for OpenPI. If a checkpoint is OpenPI and does not already ship a real passport-compatible config, go straight to `extract-passport-seed openpi`.
+
+When passporting multiple checkpoints, do them one at a time. Before starting each checkpoint and after every major phase (seed extraction, assembly, validation, signing), report what is done, what is running now, and what remains.
 
 #### Step 1: Extract Passport Seed
 

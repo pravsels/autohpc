@@ -31,10 +31,10 @@ allowed scope and exit conditions are explicit.
 ## Why This Matters
 
 Open-ended agent discovery has already wasted significant time, especially in
-checkpoint passport Phase 2. Loading a trained robotics policy and exercising
-the correct inference path is architecture-specific. When agents are asked to
-infer that path from source code, they can spend hours reverse engineering code
-that should have been captured as a reusable script.
+older checkpoint passport flows. Loading a trained robotics policy and
+exercising the correct inference path is architecture-specific. When agents are
+asked to infer that path from source code, they can spend hours reverse
+engineering code that should have been captured as a reusable script.
 
 What has worked better:
 
@@ -45,45 +45,30 @@ What has worked better:
 
 ## Checkpoint Passport Direction
 
-`checkpoint-passport/SKILL.md` currently makes Phase 2 too open-ended. It asks
-the agent to load the model, identify the public inference path, build inputs,
-run a forward pass, inspect internals, and merge dynamic JSON.
+`checkpoint-passport/SKILL.md` is the source of truth. It defines two valid
+passport creation paths:
 
-The intended replacement is:
+1. **Config-bearing checkpoints** — run `generate-passport` against an existing
+   real `config.json`, then validate and sign.
+2. **OpenPI checkpoints** — run `extract-passport-seed openpi` inside the OpenPI
+   runtime environment, then run `assemble-passport`, validate, and sign.
 
-1. Phase 1 produces a static passport draft with `generate-passport`.
-2. Phase 2 runs an architecture-specific dynamic extractor script.
-3. The extractor emits a structured dynamic JSON fragment.
-4. A first-party merge command combines static and dynamic data.
-5. `validate-checkpoint` reports hard failures, soft signals, and not-checked
-   items.
-6. `sign-checkpoint` writes `SIGNOFF.json` only after hard checks pass.
+Do not add an intermediate "generate config" phase for OpenPI. OpenPI's
+inference contract is built by `cfg.data.create()`, transforms, norm stats, and
+adapter behavior; the supported artifact is `PASSPORT_SEED.json`, not a
+synthetic `config.json`.
 
-Agents should not discover model loading during Phase 2. If no extractor exists
-for the checkpoint architecture, the agent should stop and ask.
+Agents should not discover model loading. If the supported extractor cannot run
+in the current environment, or a required argument such as `--openpi-config-name`
+or `--reference-dataset-path` is missing, the agent should stop and ask.
 
-Known extractor anchors:
+Supported extractor anchors:
 
-- OpenPI checkpoints: repurpose the loading path from
-  `../alpha-robotics/hw_control/new_lerobot_integrations/deploy_policy.py`,
-  especially `missiontracker.adapters.load_policy_adapter(...)` with
-  `force_architecture="openpi"`, `openpi_config_name`, prompt, resize size, and
-  the adapter inference path.
-- MultiTask DiT safetensors checkpoints: repurpose
-  `MultiTaskDiTPolicy.load(<checkpoint_dir>)`, which loads `config.json` and
-  `model.safetensors`, then run the public `select_action` or
-  `predict_action_chunk` path.
-
-Open questions for implementation:
-
-- Should extractor scripts live in `checkpoint-passport`, in the target model
-  repo, or both?
-- Should `checkpoint-passport` provide only a generic extractor interface plus
-  schemas, or also ship first-party OpenPI and MultiTask DiT extractors?
-- What should the exact dynamic JSON schema be, and should it be a separate
-  dataclass from `MODEL_PASSPORT.json`?
-- Should the merge command refuse unknown keys and require schema version
-  compatibility?
+- OpenPI checkpoints: `extract-passport-seed openpi`, implemented in
+  `checkpoint-passport/checkpoint_passport/runtime_extractors/openpi.py`.
+- Config-bearing safetensors/checkpoint families: `generate-passport --config`
+  when the checkpoint already ships a real config that fully describes the
+  input/output contract.
 
 ## Repo-Wide Audit Backlog
 
@@ -105,25 +90,12 @@ phase".
 
 ### Checkpoint Passport
 
-Highest priority.
+Keep the two-path workflow explicit:
 
-Replace Phase 2 with a script-first dynamic extraction contract:
-
-- Require a runtime extractor script for each supported architecture.
-- Require fixed CLI arguments: checkpoint path, output JSON path, device,
-  optional config name, optional prompt, optional dataset reference.
-- Require the extractor to run inside the model's own container/environment.
-- Require the extractor to emit schema-validated JSON.
-- Add a first-party merge command instead of "a small Python script merging the
-  two dicts is fine".
-- For missing runtime extractors, say: stop and ask; do not infer model loading.
-
-Also tighten:
-
-- "Left null (Phase 2 / judgment)" should become "filled by script",
-  "not applicable with reason", or "stop and ask".
-- `library_versions` should come from a fixed environment export, not an
-  open-ended dependency list.
+- Config-bearing checkpoint: `generate-passport --config`.
+- OpenPI checkpoint: `extract-passport-seed openpi` → `assemble-passport`.
+- Missing extractor, missing runtime environment, missing config name, or
+  missing reference dataset details means stop and ask.
 - Soft-signal acceptance should require a decision record with signal IDs and
   evidence.
 
@@ -224,9 +196,9 @@ Add a warning that autoresearch is a special opt-in mode:
 ## Suggested Implementation Order
 
 1. Add the root README bounded-agent contract.
-2. Rewrite checkpoint passport Phase 2 around extractor scripts.
-3. Add or specify OpenPI and MultiTask DiT dynamic extractors.
-4. Add a schema-validated dynamic JSON fragment and merge command.
+2. Keep checkpoint passport docs aligned with the two-path workflow.
+3. Add or specify additional runtime extractors only when a new checkpoint family needs one.
+4. Keep extractor outputs schema-validated and assembled by first-party commands.
 5. Tighten deployment protocol around runner profiles and bindings artifacts.
 6. Tighten dataset adaptation around schema probes and contract tests.
 7. Update run/eval tracking to require evidence-cited qualitative notes.
