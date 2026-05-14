@@ -21,6 +21,41 @@ Core principle: adapt the code to read the data as-is. Do **not** convert or cop
 - User is training on the repo's own provided data
 - User's data already matches the repo's expected format
 
+## Agent Algorithm
+
+Follow this order; do not convert large datasets unless the user explicitly asks.
+
+1. **Preflight**
+   - Confirm the target repo's normal training smoke test works with its expected
+     data or demo data.
+   - Identify the user's dataset path and the container/runtime where training
+     will run.
+
+2. **Inspect actual data inside the container**
+   - Use native libraries for the file format to record keys, shapes, dtypes,
+     lengths, cameras/modalities, state/action layout, and timestamps.
+   - Save or paste a small schema summary; do not copy or rewrite the dataset.
+
+3. **Inspect expected loader contract**
+   - Read the repo's dataset classes/configs.
+   - Identify expected keys, shapes, dtype, normalization, sequence/window
+     conventions, and language/action/state mappings.
+
+4. **Map the gap**
+   - Write the mapping from user fields to expected fields.
+   - If required data is missing or ambiguous, stop and ask.
+
+5. **Implement adapter/loader**
+   - Add code in the target repo that reads the user's format directly and emits
+     the repo's expected sample structure.
+   - Register it through the repo's normal config mechanism.
+
+6. **Verify**
+   - Instantiate the loader inside the container and fetch one or more samples.
+   - Assert keys/shapes/dtypes and run a small training smoke test with the real
+     entry point.
+   - Record evidence in the run log before proceeding to full training.
+
 ## Core Pattern
 
 1. **Inspect the user's dataset inside the container.** Use the container's installed tools (e.g. `h5py`, `numpy`, `pandas`) to examine file structure, keys, shapes, and dtypes. Do not install inspection tools on the host.

@@ -39,6 +39,41 @@ Use when:
 - you need a repeatable preflight record before the first run, or before a
   fresh run after hardware, code, bindings, or checkpoint changes
 
+## Agent Algorithm
+
+Follow this order. The sections below define the evidence standard and detailed
+chain audit.
+
+1. **Gate on signed checkpoint**
+   - Run `validate-checkpoint <ckpt_dir> --require-signoff`.
+   - Stop on any hard failure.
+
+2. **Collect sources of truth**
+   - Load `MODEL_PASSPORT.json` as expected model contract.
+   - Identify the target repo runner/container and real model-loading path.
+   - Capture live or replay rig samples for the modalities the passport declares.
+
+3. **Build verification script**
+   - Write code that loads expected passport values and observed runner/device
+     values.
+   - Use assertions for deterministic comparisons.
+   - Save the script with the audit artifact.
+
+4. **Run chain audit**
+   - Validate input keys, shapes, dtypes, image semantics, normalization,
+     model load, forward pass, output shape, unnormalization/post-processing, and
+     final emission command.
+   - Missing data or failed assertions are failures, not judgment calls.
+
+5. **Record evidence**
+   - Save script output, failures, screenshots/samples if relevant, and the exact
+     deployment command that would run.
+   - Do not patch code or relax assertions during preflight.
+
+6. **Decide handoff**
+   - If all checks pass, record deploy-ready status.
+   - If any check fails, report the mismatch and stop for user/owner decision.
+
 ## Core Pattern
 
 Treat preflight as a comparison across three sources of truth:

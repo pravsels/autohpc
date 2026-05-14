@@ -24,6 +24,38 @@ If cluster behavior, modules, container runtime, or policy is unclear, check:
 
 If docs imply this skill is stale, propose a patch and ask for approval before changing the skill.
 
+## Agent Algorithm
+
+Follow this order. The phase sections below provide detailed commands.
+
+1. **Classify the target**
+   - If no local Docker image builds and runs yet, stay in Phase 1.
+   - If the image works locally and the target is a Slurm/container cluster,
+     proceed to Phase 3 only after Phase 1 passes.
+   - If the target is a cloud VM with Docker, follow the cluster profile rather
+     than exporting/converting images.
+
+2. **Phase 1: build and test locally**
+   - Verify base image GPU/CUDA support and architecture compatibility.
+   - Build using existing `docker/` scripts where present.
+   - Smoke test the real application workflow inside the container.
+   - Stop on build or smoke-test failure; do not promote a broken image.
+
+3. **Phase 3: promote for target runtime**
+   - Read the cluster profile.
+   - For Slurm/Apptainer targets, build/convert the correct architecture image
+     and place heavy artifacts on scratch.
+   - For Docker-native VMs, clone/build on the VM if the cluster profile says so.
+
+4. **Verify promoted artifact**
+   - On the target, run a minimal container command that imports/runs the actual
+     application entry point.
+   - Record image tag/path, architecture, runtime, and smoke-test command.
+
+5. **Handoff**
+   - Once the artifact is verified, follow `hpc-training-operations/SKILL.md`
+     for submission and monitoring.
+
 ## Phase 1 — Local Docker build and test (do this first)
 
 Do **not** skip ahead to Phase 3. Do **not** plan for cluster deployment, ask about target clusters, or parameterize SSH/remote paths yet — **except** for architecture compatibility (see step 3 below). Choosing an amd64-only base image or pinning x86-only package versions in Phase 1 means redoing the entire Dockerfile in Phase 3. Verify multi-arch support now.

@@ -52,6 +52,9 @@ uv pip install -e ../autohpc/checkpoint-passport
 
 - This repo is a reference. Apply the docs to the target ML repo; do not copy
   or scaffold AutoHPC files into the target repo.
+- In-repo AutoHPC skills are canonical over global or personal skills with
+  similar names. Read the relevant `SKILL.md` and follow its **Agent Algorithm**
+  before using reference sections or external skill memory.
 - Confirm the phase with the user before continuing. The phase table is a
   heuristic, not ground truth.
 - The Docker image is the build artifact for local and remote work. Do not

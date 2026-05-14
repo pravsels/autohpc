@@ -30,6 +30,54 @@ The skill ships a runnable Python package (`checkpoint_passport`). Read `checkpo
 
 Do not skip the passport for "experimental" or "internal-only" checkpoints. Do not defer it until "after eval looks good."
 
+## Agent Algorithm
+
+Follow this order. Later sections explain details, but this algorithm is the
+canonical workflow.
+
+1. **Preflight**
+   - Read this file, not global/personal checkpoint passport skills.
+   - Install/use `<autohpc>/checkpoint-passport` in the runtime environment.
+   - Verify checkpoint path, training repo path, and target repo path if used.
+   - If using a remote AutoHPC clone, verify it is on the intended commit/branch.
+
+2. **Classify the checkpoint**
+   - If the checkpoint already ships a real passport-compatible `config.json`,
+     use Path A.
+   - Else if it is OpenPI, use Path B.
+   - Else stop and ask; do not infer a new architecture workflow.
+
+3. **Create `MODEL_PASSPORT.json`**
+   - Path A: run `generate-passport` with `--config` and `--training-repo`.
+   - Path B: run `extract-passport-seed openpi` inside the OpenPI runtime, with
+     `--device` and real `--reference-dataset-path`, then run
+     `assemble-passport`.
+   - For OpenPI, never create or use a synthetic `config.json`.
+
+4. **Validate**
+   - Run `validate-checkpoint <ckpt_dir>`.
+   - If hard failures exist, fix the passport/checkpoint or stop.
+   - If only soft signals exist, record the accepted reason for signing.
+
+5. **Sign**
+   - Run `sign-checkpoint <ckpt_dir> --reason '<reason>'`.
+   - Run/confirm validation with `--require-signoff`.
+
+6. **Publish only after signing**
+   - Create or update `README.md` and `TRAINING_LOG.md`; include W&B links when
+     shareable synced runs exist.
+   - Stage an explicit publish package with `publish-checkpoint stage`.
+   - Run `check-publish-ready <publish_dir>`.
+   - Report preflight: repo ID, revision, package mode, top-level contents,
+     file count, total size, and W&B-link status.
+   - Upload with `publish-checkpoint upload --publish-dir <publish_dir>`.
+
+7. **Handoff**
+   - If evaluating, follow `eval-tracking/SKILL.md`.
+   - If deploying, follow `deployment-protocol/SKILL.md`.
+   - If uploading another checkpoint, complete and verify the current upload
+     before starting the next one.
+
 ## Two Valid Passport Creation Paths
 
 There are exactly two ways to create a passport. Choose the one that matches the checkpoint.
@@ -176,22 +224,72 @@ The signer:
 
 ## Publish
 
+Publish is staging-first. Do not upload the training checkpoint root directly.
+Create a clean publish package containing only the files meant to move, inspect
+the manifest/size, then upload that package directory.
+
+Default to an inference package:
+
+- `MODEL_PASSPORT.json`
+- `SIGNOFF.json`
+- `README.md`
+- `TRAINING_LOG.md`
+- `assets/`
+- final params / inference weights only
+
+Do not include intermediate step directories, `train_state/`, optimizer state,
+W&B runs, caches, or full checkpoint roots unless the user explicitly asks for a
+resume-training package.
+
+Before staging, verify the tooling you will run is current. If using a remote
+AutoHPC clone on a cluster, check its git commit/status or pull the intended
+branch before running `publish-checkpoint`; do not assume the cluster clone has
+the same code as the local repo.
+
+Before upload, the model card must be complete enough for a downstream user to
+understand the artifact. If a W&B run was synced and has a public/shareable URL,
+include that clickable dashboard link in `README.md` and keep the training
+dynamics in `TRAINING_LOG.md`.
+
 Before uploading to HF:
 
 ```bash
-check-publish-ready <ckpt_dir>
+publish-checkpoint stage \
+  --out <publish_dir> \
+  --file <ckpt>/MODEL_PASSPORT.json \
+  --file <ckpt>/SIGNOFF.json \
+  --file <ckpt>/README.md \
+  --file <ckpt>/TRAINING_LOG.md \
+  --dir <ckpt>/assets:assets \
+  --dir <ckpt>/<step>/params:checkpoints/<step>/params
+
+check-publish-ready <publish_dir>
 ```
 
 This verifies `README.md`, `TRAINING_LOG.md`, `MODEL_PASSPORT.json`, and `SIGNOFF.json` are present, non-empty (for docs), valid JSON (for artifacts), and that the internal validator passes with `require_signoff=True`.
+
+After staging and before `publish-checkpoint upload`, report a short preflight
+summary and wait if anything is surprising:
+
+- HF repo ID and revision
+- publish directory path
+- package mode: `params-only` or `full-train-state`
+- top-level contents
+- file count and total size from the stage manifest / `du -sh`
+- confirmation that `README.md` includes W&B links when available
+
+Never expose tokens in commands, logs, or status updates. Do not `cat` token
+files or inline `hf_...` values in visible commands. Read tokens into environment
+variables inside the remote shell, or use the authentication mechanism provided
+by the cluster/user environment.
 
 Upload and download use the bounded helpers:
 
 ```bash
 publish-checkpoint upload \
-  --checkpoint-dir <ckpt> \
+  --publish-dir <publish_dir> \
   --repo-id <user-or-org>/<repo> \
-  --revision main \
-  --ignore-patterns 'retain/**'
+  --revision main
 
 publish-checkpoint download \
   --repo-id <user-or-org>/<repo> \
@@ -200,6 +298,11 @@ publish-checkpoint download \
 ```
 
 Upload runs `check-publish-ready` and refuses on failure. Download runs `validate-checkpoint --require-signoff` after fetching and refuses to report success on failure.
+
+If an upload/package mistake is found, stop parallel work on other checkpoints
+until the upload is killed or corrected, the staged package is verified, and the
+HF repo state is checked. Do not continue with another passport while a bad
+upload may still be running.
 
 **Do not write ad hoc `huggingface-cli upload`, `hf download`, `git lfs`, `rsync`, or Python upload scripts.** If HF auth, repo ID, revision, or output path is missing, stop and ask.
 
@@ -253,8 +356,9 @@ Stop and ask the user when:
 | Assemble | (not needed) | `assemble-passport --checkpoint-dir <ckpt> --seed <ckpt>/PASSPORT_SEED.json` |
 | Validate | `validate-checkpoint <ckpt>` | same |
 | Sign | `sign-checkpoint <ckpt> --reason '...'` | same |
-| Publish gate | `check-publish-ready <ckpt>` | same |
-| Upload | `publish-checkpoint upload --checkpoint-dir <ckpt> --repo-id ...` | same |
+| Stage package | `publish-checkpoint stage --out <publish_dir> --file ... --dir ...` | same |
+| Publish gate | `check-publish-ready <publish_dir>` | same |
+| Upload | `publish-checkpoint upload --publish-dir <publish_dir> --repo-id ...` | same |
 | Download | `publish-checkpoint download --repo-id ... --out ...` | same |
 | Deployment gate | `validate-checkpoint <ckpt> --require-signoff` | same |
 

@@ -19,6 +19,40 @@ Eval logs are separate from run logs. Run logs track training; eval logs track e
 
 **Prerequisite:** the checkpoint must already have a `MODEL_PASSPORT.json` and a passing `SIGNOFF.json` at its root. The eval harness consumes the passport's `input_contract` to drive how the model is fed (image dtype, value range, color order, channel layout, state sub-key layout, action post-processing) — without it, you risk silently mis-feeding the model and blaming the model for what's a feeding bug. If the checkpoint has no signoff, stop and follow `checkpoint-passport/SKILL.md` (in this repo) first. As a defensive gate, the eval job's startup should run `validate-checkpoint <ckpt_dir> --require-signoff` and refuse to proceed on non-zero exit.
 
+## Agent Algorithm
+
+Use this order for every evaluation.
+
+1. **Gate on passport**
+   - Run or require `validate-checkpoint <ckpt_dir> --require-signoff`.
+   - If validation fails or signoff is missing, stop and follow
+     `checkpoint-passport/SKILL.md`.
+
+2. **Create eval log**
+   - Create `eval_logs/<group>/<date>_<task>.md` before submission.
+   - Record checkpoint, passport path/verdict, source run log, config snapshot,
+     dataset, command/script, and objective.
+
+3. **Submit/run eval**
+   - Use the repo's real eval entry point.
+   - Ensure the eval harness reads the passport contract or runs the validation
+     gate at startup.
+   - Record execution ID and start time.
+
+4. **Monitor progress**
+   - Check output logs for advancing sample counts or metrics.
+   - Check error logs for failures.
+   - Append status updates with concrete evidence.
+
+5. **Complete the eval log**
+   - Record runtime, metrics, artifact links, qualitative notes, and verdict.
+   - Tie the verdict to observed metrics/artifacts, not just impression.
+
+6. **Handoff**
+   - If more evals are needed, create separate eval logs.
+   - If promoting or deploying, write/update the promotion note and follow the
+     relevant next skill.
+
 ## Eval Logs
 
 Eval logs live in `eval_logs/` in the target repo, parallel to `run_logs/`. One markdown file per evaluation.

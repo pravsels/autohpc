@@ -28,6 +28,52 @@ All three use the same run log format. Experiments add a comparison summary.
 
 When checking remote run status, use the cluster profile and try direct SSH yourself before asking the user for command output. For Isambard, the user may already have run `clifton auth`; try `ssh isambard "<command>"` first and only ask the user to refresh Clifton auth after a current SSH attempt fails.
 
+## Agent Algorithm
+
+Use this lifecycle algorithm. The sections below define the log format and
+reference details.
+
+1. **Preflight**
+   - Read the target repo's existing `run_logs/`, `slurm/`, configs, and recent
+     run log timelines.
+   - Identify run type: replication, experiment, or pipeline.
+   - Identify cluster profile and remote paths if Slurm/cloud state is involved.
+
+2. **On submit**
+   - Create or update the run log before/at submission.
+   - Record objective, script/command, config, dataset, key settings, code state,
+     and submission time.
+   - Submit using the repo's normal training/eval command.
+   - Record execution ID immediately.
+
+3. **On poll**
+   - Query scheduler/VM state directly; do not ask the user for output unless
+     access fails.
+   - Check real progress, not just "running": output log step counts, loss/metric
+     movement, error log, disk usage, and GPU telemetry where available.
+   - Append timestamped status with concrete evidence.
+
+4. **On complete**
+   - Capture runtime, final status/exit code, final step/metrics, checkpoint path,
+     config snapshot, W&B local dir and synced URL if available.
+   - Fill `Results`, W&B notes, and `Next`.
+   - Do not recommend eval/upload before checkpoint passport/signoff.
+
+5. **On resume**
+   - If resuming the same objective/config after walltime or interruption, append a
+     `Job (resumed)` block to the same run log.
+   - Only create a new run log for a meaningfully different config/data/task.
+
+6. **On publish or handoff**
+   - Follow `checkpoint-passport/SKILL.md` first.
+   - Sanitize any public `TRAINING_LOG.md` by removing cluster-specific paths,
+     node names, job IDs, and secret-adjacent details while keeping training
+     dynamics and W&B links.
+
+7. **Status updates**
+   - During long remote jobs, report what is done, what is running, what remains,
+     and the last observed scheduler/log evidence.
+
 ## Run Logs
 
 Run logs live in `run_logs/` in the target repo. One markdown file per run.

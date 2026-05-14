@@ -27,6 +27,56 @@ When command behavior, scheduler settings, modules, or storage guidance is uncle
 
 If docs contradict this skill, propose updates and confirm before editing the skill text.
 
+## Agent Algorithm
+
+Follow this order for Slurm-based training operations. Later sections provide
+templates and caveats.
+
+1. **Preflight**
+   - Identify target cluster and read `cluster-profiles/<cluster_name>.md`.
+   - Set `SSH_ALIAS`, `UNIX_USER`, `PROJECT_NAME`, `PROJECT_CODE`,
+     `PROJECT_DIR`, and `SCRATCH_DIR`.
+   - Try SSH yourself using the configured alias. Only ask the user for auth or
+     command output after a current SSH attempt fails.
+   - Open/reuse an SSH ControlMaster connection for repeated commands.
+
+2. **Verify remote state**
+   - Confirm repo path, branch/commit, container path, dataset path, scratch space,
+     and relevant modules/runtime.
+   - For user data, run `ls`/size checks on the cluster; do not assume local paths
+     match remote paths.
+   - Never print or inline secrets; use token files, `GIT_ASKPASS`, or secure env
+     handling.
+
+3. **Prepare code and artifacts**
+   - Push local code, then pull on the HPC.
+   - Keep code in home and heavy artifacts on scratch.
+   - Upload or verify container/dataset artifacts with resumable commands.
+   - Record exact artifact paths for the run log.
+
+4. **Submit**
+   - Use a checked-in `slurm/<script>.sh`; submission should be just
+     `sbatch slurm/<script>.sh`.
+   - Do not pass experiment settings via ephemeral `sbatch --export` or shell env
+     overrides.
+   - Record job ID in the run log immediately.
+
+5. **Monitor**
+   - Check scheduler state, output log progress, error log, disk usage, and GPU
+     telemetry. GPU allocation alone is not proof of progress.
+   - Report status with concrete evidence and update the run log.
+
+6. **Debug or intervene**
+   - Use `srun` for interactive debugging.
+   - Pause for confirmation before high-impact actions: `scancel`, destructive
+     cleanup, overwrite syncs, or large uploads.
+
+7. **Complete**
+   - Capture accounting (`sacct`/`seff` when available), runtime, exit code,
+     checkpoint paths, W&B sync state, and next step.
+   - Handoff to `hpc-run-tracking/SKILL.md` for log completion and
+     `checkpoint-passport/SKILL.md` before eval/upload.
+
 ## Core Pattern
 
 The `slurm/` directory in the target repo is only for training and eval sbatch scripts. Do not create helper scripts, wrapper scripts, preflight scripts, or promotion scripts there.

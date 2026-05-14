@@ -28,9 +28,11 @@ from checkpoint_passport.cli.check_publish_ready import (
     PublishReadyResult,
 )
 from checkpoint_passport.cli.publish_checkpoint import (
+    stage_package,
     upload_checkpoint,
     download_checkpoint,
     main as publish_checkpoint_main,
+    StagePackageError,
     PublishGateError,
     ValidationGateError,
 )
@@ -367,13 +369,50 @@ def test_validation_errors_from_internal_validator(tmp_path):
 # ── 11. Upload refuses when check-publish-ready fails ───────────────────
 
 
+def test_stage_package_copies_explicit_files_and_dirs(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "README.md").write_text("# Model\n")
+    (source / "MODEL_PASSPORT.json").write_text("{}")
+    params = source / "49999" / "params"
+    params.mkdir(parents=True)
+    (params / "weights").write_bytes(b"params")
+
+    publish_dir = tmp_path / "publish"
+
+    manifest = stage_package(
+        publish_dir,
+        files=[f"{source / 'README.md'}:README.md", f"{source / 'MODEL_PASSPORT.json'}"],
+        dirs=[f"{params}:checkpoints/49999/params"],
+    )
+
+    assert (publish_dir / "README.md").read_text() == "# Model\n"
+    assert (publish_dir / "MODEL_PASSPORT.json").read_text() == "{}"
+    assert (publish_dir / "checkpoints" / "49999" / "params" / "weights").read_bytes() == b"params"
+    assert manifest["total_bytes"] == len("# Model\n") + len("{}") + len(b"params")
+    assert len(manifest["entries"]) == 3
+
+
+def test_stage_package_refuses_train_state_by_default(tmp_path):
+    train_state = tmp_path / "49999" / "train_state"
+    train_state.mkdir(parents=True)
+    (train_state / "optimizer").write_bytes(b"state")
+
+    with pytest.raises(StagePackageError, match="training artifact"):
+        stage_package(
+            tmp_path / "publish",
+            files=[],
+            dirs=[f"{train_state}:checkpoints/49999/train_state"],
+        )
+
+
 def test_upload_refuses_when_not_publish_ready(tmp_path):
     ckpt = _make_ready_checkpoint(tmp_path)
     (ckpt / "README.md").unlink()
 
     with pytest.raises(PublishGateError, match="not publish-ready"):
         upload_checkpoint(
-            checkpoint_dir=ckpt,
+            publish_dir=ckpt,
             repo_id="test-org/test-repo",
             revision="main",
         )
@@ -393,7 +432,7 @@ def test_upload_calls_hf_when_ready(tmp_path):
         "checkpoint_passport.cli.publish_checkpoint._hf_upload"
     ) as mock_upload:
         upload_checkpoint(
-            checkpoint_dir=ckpt,
+            publish_dir=ckpt,
             repo_id="test-org/test-repo",
             revision="main",
         )
@@ -419,7 +458,7 @@ def test_upload_forwards_validation_context_to_publish_gate(tmp_path):
         "checkpoint_passport.cli.publish_checkpoint._hf_upload"
     ):
         upload_checkpoint(
-            checkpoint_dir=ckpt,
+            publish_dir=ckpt,
             repo_id="test-org/test-repo",
             revision="main",
             dataset_path=dataset_path,
@@ -460,7 +499,7 @@ def test_publish_upload_cli_accepts_validation_context(
             [
                 "publish-checkpoint",
                 "upload",
-                "--checkpoint-dir",
+                "--publish-dir",
                 str(ckpt),
                 "--repo-id",
                 "test-org/test-repo",

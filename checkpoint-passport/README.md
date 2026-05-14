@@ -35,7 +35,8 @@ See `SKILL.md` for the full bounded workflow. The two paths converge at validate
 | `validate-checkpoint` | Run integrity checks |
 | `sign-checkpoint` | Hash and write SIGNOFF.json |
 | `check-publish-ready` | Pre-upload packaging gate |
-| `publish-checkpoint` | Upload/download with validation gates |
+| `publish-checkpoint stage` | Build an explicit publish package from selected files/dirs |
+| `publish-checkpoint upload/download` | Upload/download with validation gates |
 
 ## Why ship code from autohpc?
 
