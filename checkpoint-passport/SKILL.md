@@ -40,6 +40,10 @@ canonical workflow.
    - Install/use `<autohpc>/checkpoint-passport` in the runtime environment.
    - Verify checkpoint path, training repo path, and target repo path if used.
    - If using a remote AutoHPC clone, verify it is on the intended commit/branch.
+   - Create any temporary extraction/signing scripts and logs in a run-scoped
+     remote work directory such as `<remote_project_dir>/autohpc_runs/<run_id>/`,
+     not in the top level of `$SCRATCH`, a VM home directory, or a cloud volume
+     mount.
 
 2. **Classify the checkpoint**
    - If the checkpoint already ships a real passport-compatible `config.json`,
@@ -219,6 +223,11 @@ Default to an inference package:
 Do not include intermediate step directories, `train_state/`, optimizer state,
 W&B runs, caches, or full checkpoint roots unless the user explicitly asks for a
 resume-training package.
+
+Do not leave helper scripts or command logs in the top level of the remote
+workspace while staging or signing. If you need a temporary script for
+`srun`/`apptainer` or a cloud VM shell, write it under a run-scoped project
+directory and remove that directory after the checkpoint is signed and uploaded.
 
 Before staging, verify the tooling you will run is current. If using a remote
 AutoHPC clone on a cluster, check its git commit/status or pull the intended

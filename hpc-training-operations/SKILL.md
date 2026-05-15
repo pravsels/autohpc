@@ -129,6 +129,8 @@ A training sbatch script should be short and linear. Before writing one, check t
 
 **Storage layout:** Keep the repo clone on `$HOME` (small, code only). Keep heavy artifacts — container images, datasets, checkpoints, outputs, W&B caches — on scratch. Bind scratch paths into the container so training never writes large files to the home directory.
 
+**Remote workspace hygiene:** Do not create ad hoc scripts, logs, manifests, or test files in the top level of a remote workspace, whether that is `$SCRATCH`, a VM home directory, or a cloud volume mount. The top level should contain project directories, not files like `passport_*.out`, `sign_*.sh`, or `test_extract.py`. Put temporary run artifacts under a run-scoped project directory such as `<remote_project_dir>/autohpc_runs/<run_id>/`; durable Slurm scripts belong in the target repo's `slurm/` directory.
+
 **Only create scripts the user asked for.** If they say "training", create one training script. Do not also create eval, preflight, or "stage N" variants unless asked. Do not create scripts for things that should be run as direct `srun` commands.
 
 **Train config files live with the repo's other configs** (e.g. `configurations/`), not in `slurm/`. The `slurm/` directory is only for sbatch scripts.
