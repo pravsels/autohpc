@@ -56,6 +56,10 @@ reference details.
 4. **On complete**
    - Capture runtime, final status/exit code, final step/metrics, checkpoint path,
      config snapshot, W&B local dir and synced URL if available.
+   - Before syncing offline W&B runs, infer the intended entity/project from the
+     run log/config, tell the user which project will receive the sync, and ask
+     if unclear or if the existing project name is generic/stale. Pass the
+     project explicitly to `wandb sync`.
    - Fill `Results`, W&B notes, and `Next`.
    - Do not recommend eval/upload before checkpoint passport/signoff.
 
@@ -187,16 +191,21 @@ If W&B is not yet synced, write `pending — run wandb sync <local>`.
 
 `wandb` is typically not installed on the host. Run `wandb sync` inside the container:
 
+Before syncing, choose the intended W&B project deliberately. Infer it from the
+run log/config when obvious, tell the user which project will receive the sync,
+and ask when unclear. Do not rely on a stale or generic project embedded in an
+offline run. Pass `--project <project_name>` explicitly.
+
 ```bash
 # Slurm / Apptainer
 apptainer exec --bind /scratch/... <container.sif> bash -lc \
-  'export WANDB_API_KEY="$(cat ~/.wandb_key)"; wandb sync <offline-run-dir>'
+  'export WANDB_API_KEY="$(cat ~/.wandb_key)"; wandb sync --project <project_name> <offline-run-dir>'
 
 # Cloud VM / Docker
 docker run --rm --network=host \
   -e WANDB_API_KEY="$(cat ~/.wandb_key)" \
   -v /path/to/repo:/workspace/repo \
-  <image>:<tag> wandb sync /workspace/repo/wandb/<offline-run-dir>
+  <image>:<tag> wandb sync --project <project_name> /workspace/repo/wandb/<offline-run-dir>
 ```
 
 If sync fails with "No API key configured", ask the user to place their key in a dotfile (e.g. `~/.wandb_key`). Don't hardcode the key in scripts or run logs.

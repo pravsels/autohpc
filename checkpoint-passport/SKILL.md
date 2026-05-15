@@ -72,8 +72,9 @@ canonical workflow.
      shareable synced runs exist.
    - Stage an explicit publish package with `publish-checkpoint stage`.
    - Run `check-publish-ready <publish_dir>`.
-   - Report preflight: repo ID, revision, package mode, top-level contents,
-     file count, total size, and W&B-link status.
+   - Tell the user which HF repo ID and revision will receive the upload, then
+     report preflight: package mode, top-level contents, file count, total size,
+     and W&B-link status.
    - Upload with `publish-checkpoint upload --publish-dir <publish_dir>`.
 
 7. **Handoff**
@@ -256,8 +257,10 @@ check-publish-ready <publish_dir>
 
 This verifies `README.md`, `TRAINING_LOG.md`, `MODEL_PASSPORT.json`, and `SIGNOFF.json` are present, non-empty (for docs), valid JSON (for artifacts), and that the internal validator passes with `require_signoff=True`.
 
-After staging and before `publish-checkpoint upload`, report a short preflight
-summary and wait if anything is surprising:
+After staging and before every `publish-checkpoint upload`, tell the user which
+HF repo ID and revision will receive the upload, then report a short preflight
+summary. Ask before continuing if the destination is unclear, new/unexpected, or
+public/private visibility matters:
 
 - HF repo ID and revision
 - publish directory path
