@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autohpc-wandb-sync"
+version = "0.1.0"
+description = "Bounded W&B offline sync helper for AutoHPC training runs."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[project.scripts]
+autohpc-wandb-sync = "autohpc_wandb_sync.cli.sync:main"
+
+[tool.setuptools.packages.find]
+include = ["autohpc_wandb_sync*"]
+exclude = ["tests*"]

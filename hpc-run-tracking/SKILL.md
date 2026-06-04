@@ -189,26 +189,33 @@ If W&B is not yet synced, write `pending — run wandb sync <local>`.
 
 ### W&B sync
 
-`wandb` is typically not installed on the host. Run `wandb sync` inside the container:
-
-Before syncing, choose the intended W&B project deliberately. Infer it from the
-run log/config when obvious, tell the user which project will receive the sync,
-and ask when unclear. Do not rely on a stale or generic project embedded in an
-offline run. Pass `--project <project_name>` explicitly.
+Use the bounded AutoHPC sync helper instead of composing ad hoc `wandb sync`
+commands. Install it where the sync will run:
 
 ```bash
-# Slurm / Apptainer
-apptainer exec --bind /scratch/... <container.sif> bash -lc \
-  'export WANDB_API_KEY="$(cat ~/.wandb_key)"; wandb sync --project <project_name> <offline-run-dir>'
-
-# Cloud VM / Docker
-docker run --rm --network=host \
-  -e WANDB_API_KEY="$(cat ~/.wandb_key)" \
-  -v /path/to/repo:/workspace/repo \
-  <image>:<tag> wandb sync --project <project_name> /workspace/repo/wandb/<offline-run-dir>
+uv pip install -e ../autohpc/wandb-sync
 ```
 
-If sync fails with "No API key configured", ask the user to place their key in a dotfile (e.g. `~/.wandb_key`). Don't hardcode the key in scripts or run logs.
+Before syncing, choose the intended W&B destination deliberately. Ask the user
+for both `--entity` and `--project` unless both are already explicit in the run
+log/config. Do not rely on stale defaults embedded in the offline run.
+
+```bash
+autohpc-wandb-sync \
+  --entity <wandb-entity> \
+  --project <wandb-project> \
+  --offline-run-dir <offline-run-dir> \
+  --container <container.sif> \
+  --bind <scratch-root>:<scratch-root> \
+  --bind <home-root>:<home-root> \
+  --wandb-token-file ~/.wandb_token \
+  --dry-run
+```
+
+After the dry run looks correct, remove `--dry-run` and add `--yes`. The helper
+also checks `~/.wandb_token` and `~/.wandb_key` if `--wandb-token-file` is not
+provided. If no token file exists, ask the user to create one. Never hardcode
+or print the key in scripts, commands, or run logs.
 
 ### Per-job-block W&B URLs
 

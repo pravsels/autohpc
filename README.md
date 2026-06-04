@@ -37,15 +37,18 @@ user. Wait for confirmation before continuing.
 - `hpc-training-operations/SKILL.md` — Slurm submission, monitoring, and debugging.
 - `hpc-run-tracking/SKILL.md` — per-run training logs.
 - `checkpoint-passport/SKILL.md` — canonical `MODEL_PASSPORT.json` / `SIGNOFF.json` tooling and workflow.
+- `wandb-sync/` — runnable W&B offline sync helper used by run tracking.
 - `eval-tracking/SKILL.md` — per-eval logs and promotion notes.
 - `deployment-protocol/` — first-run deployment preflight on robot or inference rig.
 - `cluster-profiles/` — cluster-specific docs and caveats.
 - `autoresearch/` — post-baseline autonomous experiment loops.
 
-Most folders are docs-only skills. `checkpoint-passport/` also ships an installable Python package:
+Most folders are docs-only skills. `checkpoint-passport/` and `wandb-sync/`
+also ship installable Python packages:
 
 ```bash
 uv pip install -e ../autohpc/checkpoint-passport
+uv pip install -e ../autohpc/wandb-sync
 ```
 
 ## Agent Contract
