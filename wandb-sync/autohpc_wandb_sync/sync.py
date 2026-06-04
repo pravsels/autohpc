@@ -64,6 +64,8 @@ def validate_config(cfg: WandbSyncConfig) -> None:
         raise WandbSyncError(
             "missing W&B token file: pass --wandb-token-file or create ~/.wandb_token"
         )
+    if cfg.ssh_host:
+        return
     if not cfg.token_file.is_file():
         raise WandbSyncError(f"W&B token file not found: {cfg.token_file}")
     if not cfg.offline_run_dir.exists():

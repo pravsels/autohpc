@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from autohpc_wandb_sync.sync import (
@@ -159,3 +161,20 @@ def test_ssh_mode_runs_only_srun_apptainer_command_remotely(tmp_path):
     assert "module load brics/apptainer-multi-node" in remote_script
     assert "srun --ntasks=1 --cpu-bind=cores apptainer exec" in remote_script
     assert "wandb sync --entity entity --project project" in remote_script
+
+
+def test_ssh_mode_allows_paths_that_exist_only_remotely():
+    cfg = WandbSyncConfig(
+        offline_run_dir=Path("/scratch/u6kr/user/project/wandb/offline-run-remote"),
+        container=Path("/scratch/u6kr/user/project/container/openpi.sif"),
+        entity="entity",
+        project="project",
+        token_file=Path("/home/u6kr/user/.wandb_token"),
+        binds=[Path("/scratch/u6kr/user:/scratch/u6kr/user")],
+        ssh_host="u6kr.aip2.isambard",
+    )
+
+    command = build_wandb_sync_command(cfg)
+
+    assert command[:2] == ["ssh", "u6kr.aip2.isambard"]
+    assert "/scratch/u6kr/user/project/wandb/offline-run-remote" in command[-1]
