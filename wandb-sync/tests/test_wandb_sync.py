@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -34,7 +35,7 @@ def test_builds_inner_wandb_sync_command_with_required_destination(tmp_path):
     assert command[:2] == ["bash", "-lc"]
     script = command[-1]
     assert 'WANDB_API_KEY="$(cat ' in script
-    assert "&& wandb sync" in script
+    assert f"&& {sys.executable} -m wandb sync" in script
     assert "--entity alpha-robotics" in script
     assert "--project so101-stacking-rings" in script
     assert str(offline) in script

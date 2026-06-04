@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import shlex
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Sequence
@@ -207,7 +208,10 @@ def coerce_paths(values: Iterable[str] | None) -> list[Path]:
 def _build_inner_script(cfg: InnerSyncConfig) -> str:
     assert cfg.token_file is not None
     wandb_parts = [
-        "wandb sync",
+        shlex.quote(sys.executable),
+        "-m",
+        "wandb",
+        "sync",
         "--entity",
         shlex.quote(cfg.entity or ""),
         "--project",
