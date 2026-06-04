@@ -101,12 +101,39 @@ rm -f "$ASKPASS"
 
 ## Wandb Sync (inside Apptainer)
 
-Do not run Python helpers or compute work on the login node. Run the AutoHPC
-sync helper from the agent/local environment and let it SSH to Isambard to
-launch only the `srun apptainer exec ... wandb sync` command remotely:
+Do not install into the `.sif`; it is read-only. Install AutoHPC helpers into a
+writable scratch environment that is mounted into the container, such as the
+project venv:
 
 ```bash
-autohpc-wandb-sync \
+srun --ntasks=1 --cpu-bind=cores apptainer exec \
+  --bind /scratch/<project>/<user>:/scratch/<project>/<user> \
+  --bind /home/<project>/<user>:/home/<project>/<user> \
+  /scratch/<project>/<user>/<repo>/container/<sif_file> \
+  bash -lc 'export UV_PROJECT_ENVIRONMENT=/scratch/<project>/<user>/<repo>/.venv
+            uv pip install -e /home/<project>/<user>/autohpc/wandb-sync'
+```
+
+Then run sync inside the container/runtime environment:
+
+```bash
+srun --ntasks=1 --cpu-bind=cores apptainer exec \
+  --bind /scratch/<project>/<user>:/scratch/<project>/<user> \
+  --bind /home/<project>/<user>:/home/<project>/<user> \
+  /scratch/<project>/<user>/<repo>/container/<sif_file> \
+  bash -lc 'export UV_PROJECT_ENVIRONMENT=/scratch/<project>/<user>/<repo>/.venv
+            autohpc-wandb-sync sync \
+              --entity <wandb-entity> \
+              --project <wandb-project> \
+              --wandb-token-file /home/<project>/<user>/.wandb_token \
+              --yes \
+              /scratch/<project>/<user>/<repo>/wandb/offline-run-...'
+```
+
+If launching from outside the container runtime, use the explicit wrapper mode:
+
+```bash
+autohpc-wandb-sync launch \
   --ssh-host <PROJECT_ID>.aip2.isambard \
   --module brics/apptainer-multi-node \
   --entity <wandb-entity> \
@@ -119,9 +146,8 @@ autohpc-wandb-sync \
   --dry-run
 ```
 
-After the dry run looks correct, remove `--dry-run` and add `--yes`. Always set
-both `--entity` and `--project`; do not rely on defaults embedded in the
-offline run. Do not inline API keys in commands or logs; read them from a
+Always set both `--entity` and `--project`; do not rely on defaults embedded in
+the offline run. Do not inline API keys in commands or logs; read them from a
 private token file inside the remote shell.
 
 ## Notes
