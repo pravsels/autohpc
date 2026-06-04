@@ -190,7 +190,9 @@ If W&B is not yet synced, write `pending — run wandb sync <local>`.
 ### W&B sync
 
 Use the bounded AutoHPC sync helper instead of composing ad hoc `wandb sync`
-commands. Install it where the sync will run:
+commands. Install/run the helper in the agent's local environment. For remote
+clusters, check the cluster profile for whether to use `--ssh-host` and which
+container module to load.
 
 ```bash
 uv pip install -e ../autohpc/wandb-sync
@@ -202,6 +204,8 @@ log/config. Do not rely on stale defaults embedded in the offline run.
 
 ```bash
 autohpc-wandb-sync \
+  --ssh-host <ssh-alias> \
+  --module <apptainer-module> \
   --entity <wandb-entity> \
   --project <wandb-project> \
   --offline-run-dir <offline-run-dir> \

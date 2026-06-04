@@ -36,14 +36,24 @@ output redacts the token-file path.
 
 ## Common Patterns
 
-Use Slurm allocation by default:
+Run from the agent/local environment and launch the sync on a remote cluster via SSH:
+
+```bash
+autohpc-wandb-sync \
+  --ssh-host <ssh-alias-or-host> \
+  --module <container-runtime-module> \
+  --entity <wandb-entity> \
+  --project <wandb-project> \
+  --offline-run-dir /scratch/.../wandb/offline-run-... \
+  --container /scratch/.../container/model.sif \
+  --bind /scratch/...:/scratch/... \
+  --bind /home/...:/home/... \
+  --wandb-token-file /home/.../.wandb_token \
+  --dry-run
+```
+
+Use Slurm allocation by default when running directly on a cluster compute-capable shell:
 
 ```bash
 autohpc-wandb-sync ... --yes
-```
-
-Run Apptainer directly when a compute allocation is not needed:
-
-```bash
-autohpc-wandb-sync ... --no-srun --yes
 ```

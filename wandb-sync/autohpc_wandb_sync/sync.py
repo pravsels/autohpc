@@ -24,6 +24,8 @@ class WandbSyncConfig:
     srun_args: list[str] | None = None
     apptainer_args: list[str] | None = None
     wandb_args: list[str] | None = None
+    ssh_host: str | None = None
+    modules: list[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -73,6 +75,17 @@ def validate_config(cfg: WandbSyncConfig) -> None:
 def build_wandb_sync_command(cfg: WandbSyncConfig) -> list[str]:
     validate_config(cfg)
 
+    command = _build_cluster_command(cfg)
+    if cfg.ssh_host:
+        remote_parts = []
+        for module_name in cfg.modules or []:
+            remote_parts.append("module load " + shlex.quote(module_name))
+        remote_parts.append(render_command(command))
+        return ["ssh", cfg.ssh_host, "; ".join(remote_parts)]
+    return command
+
+
+def _build_cluster_command(cfg: WandbSyncConfig) -> list[str]:
     command: list[str] = []
     if cfg.use_srun:
         command.extend(["srun", *(cfg.srun_args or ["--ntasks=1", "--cpu-bind=cores"])])

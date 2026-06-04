@@ -76,6 +76,17 @@ def main() -> None:
         help="extra argument passed to wandb sync; repeatable",
     )
     parser.add_argument(
+        "--ssh-host",
+        default=None,
+        help="run the Slurm/Apptainer sync command on this host via ssh",
+    )
+    parser.add_argument(
+        "--module",
+        action="append",
+        default=None,
+        help="remote environment module to load before srun; repeatable",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="print the command with token path redacted and do not run it",
@@ -99,6 +110,8 @@ def main() -> None:
         srun_args=args.srun_arg,
         apptainer_args=args.apptainer_arg,
         wandb_args=args.wandb_arg,
+        ssh_host=args.ssh_host,
+        modules=args.module,
     )
 
     try:

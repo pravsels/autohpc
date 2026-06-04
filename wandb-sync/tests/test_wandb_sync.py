@@ -132,3 +132,30 @@ def test_sync_parses_wandb_url_from_output(tmp_path):
 
     assert result.url == "https://wandb.ai/entity/project/runs/abcd"
     assert seen["command"][0:2] == ["apptainer", "exec"]
+
+
+def test_ssh_mode_runs_only_srun_apptainer_command_remotely(tmp_path):
+    token = tmp_path / ".wandb_token"
+    token.write_text("secret")
+    offline = tmp_path / "offline-run"
+    offline.mkdir()
+    container = tmp_path / "container.sif"
+    container.write_text("sif")
+    cfg = WandbSyncConfig(
+        offline_run_dir=offline,
+        container=container,
+        entity="entity",
+        project="project",
+        token_file=token,
+        binds=[tmp_path],
+        ssh_host="u6kr.aip2.isambard",
+        modules=["brics/apptainer-multi-node"],
+    )
+
+    command = build_wandb_sync_command(cfg)
+
+    assert command[:2] == ["ssh", "u6kr.aip2.isambard"]
+    remote_script = command[-1]
+    assert "module load brics/apptainer-multi-node" in remote_script
+    assert "srun --ntasks=1 --cpu-bind=cores apptainer exec" in remote_script
+    assert "wandb sync --entity entity --project project" in remote_script
