@@ -596,3 +596,141 @@ def test_download_forwards_validation_context(tmp_path):
         target_repo=target_repo,
         require_signoff=True,
     )
+
+
+# ── 12. Weight directory structure checks ────────────────────────────────
+
+
+def test_bare_params_at_root_rejected(tmp_path):
+    """params/ directly at the publish root is a packaging error."""
+    ckpt = _make_ready_checkpoint(tmp_path)
+    (ckpt / "params").mkdir()
+    (ckpt / "params" / "weights.safetensors").write_bytes(b"fake")
+
+    result = check_publish_ready(ckpt)
+
+    assert result.ready is False
+    assert any("params" in e and "publish root" in e for e in result.packaging_errors)
+
+
+def test_bare_weights_at_root_rejected(tmp_path):
+    """weights/ directly at the publish root is a packaging error."""
+    ckpt = _make_ready_checkpoint(tmp_path)
+    (ckpt / "weights").mkdir()
+    (ckpt / "weights" / "layer.bin").write_bytes(b"fake")
+
+    result = check_publish_ready(ckpt)
+
+    assert result.ready is False
+    assert any("weights" in e and "publish root" in e for e in result.packaging_errors)
+
+
+def test_bare_model_at_root_rejected(tmp_path):
+    """model/ directly at the publish root is a packaging error."""
+    ckpt = _make_ready_checkpoint(tmp_path)
+    (ckpt / "model").mkdir()
+    (ckpt / "model" / "layer.bin").write_bytes(b"fake")
+
+    result = check_publish_ready(ckpt)
+
+    assert result.ready is False
+    assert any("model" in e and "publish root" in e for e in result.packaging_errors)
+
+
+def test_params_under_step_prefix_accepted(tmp_path):
+    """step_49999/params/ is the correct layout — no structural error."""
+    ckpt = _make_ready_checkpoint(tmp_path)
+    step_dir = ckpt / "step_49999" / "params"
+    step_dir.mkdir(parents=True)
+    (step_dir / "weights.safetensors").write_bytes(b"fake")
+
+    mock_result = MagicMock()
+    mock_result.has_failures = False
+    mock_result.observations = []
+
+    with patch(
+        "checkpoint_passport.cli.check_publish_ready.self_validate_passport",
+        return_value=mock_result,
+    ):
+        result = check_publish_ready(ckpt)
+
+    assert result.ready is True
+    assert not any("publish root" in e for e in result.packaging_errors)
+
+
+def test_params_under_epoch_prefix_accepted(tmp_path):
+    """epoch_200/params/ is a valid layout."""
+    ckpt = _make_ready_checkpoint(tmp_path)
+    epoch_dir = ckpt / "epoch_200" / "params"
+    epoch_dir.mkdir(parents=True)
+    (epoch_dir / "weights.safetensors").write_bytes(b"fake")
+
+    mock_result = MagicMock()
+    mock_result.has_failures = False
+    mock_result.observations = []
+
+    with patch(
+        "checkpoint_passport.cli.check_publish_ready.self_validate_passport",
+        return_value=mock_result,
+    ):
+        result = check_publish_ready(ckpt)
+
+    assert result.ready is True
+    assert not any("publish root" in e for e in result.packaging_errors)
+
+
+def test_params_under_numeric_step_accepted(tmp_path):
+    """49999/params/ (bare numeric step) is a valid layout."""
+    ckpt = _make_ready_checkpoint(tmp_path)
+    step_dir = ckpt / "49999" / "params"
+    step_dir.mkdir(parents=True)
+    (step_dir / "weights.safetensors").write_bytes(b"fake")
+
+    mock_result = MagicMock()
+    mock_result.has_failures = False
+    mock_result.observations = []
+
+    with patch(
+        "checkpoint_passport.cli.check_publish_ready.self_validate_passport",
+        return_value=mock_result,
+    ):
+        result = check_publish_ready(ckpt)
+
+    assert result.ready is True
+    assert not any("publish root" in e for e in result.packaging_errors)
+
+
+def test_no_weight_dirs_at_all_accepted(tmp_path):
+    """Checkpoints without params/weights/model dirs still pass."""
+    ckpt = _make_ready_checkpoint(tmp_path)
+
+    mock_result = MagicMock()
+    mock_result.has_failures = False
+    mock_result.observations = []
+
+    with patch(
+        "checkpoint_passport.cli.check_publish_ready.self_validate_passport",
+        return_value=mock_result,
+    ):
+        result = check_publish_ready(ckpt)
+
+    assert result.ready is True
+
+
+def test_assets_dir_at_root_not_flagged(tmp_path):
+    """Non-weight directories like assets/ at root are fine."""
+    ckpt = _make_ready_checkpoint(tmp_path)
+    (ckpt / "assets").mkdir()
+    (ckpt / "assets" / "video.mp4").write_bytes(b"fake")
+
+    mock_result = MagicMock()
+    mock_result.has_failures = False
+    mock_result.observations = []
+
+    with patch(
+        "checkpoint_passport.cli.check_publish_ready.self_validate_passport",
+        return_value=mock_result,
+    ):
+        result = check_publish_ready(ckpt)
+
+    assert result.ready is True

@@ -43,6 +43,10 @@ NON_EMPTY_FILES = [
     "TRAINING_LOG.md",
 ]
 
+# Directories that hold model weights and must not sit at the publish root
+# without a step/epoch prefix providing checkpoint identity.
+_WEIGHT_DIR_NAMES = {"params", "weights", "model"}
+
 
 @dataclass
 class PublishReadyResult:
@@ -65,6 +69,32 @@ class PublishReadyResult:
             "packaging_errors": list(self.packaging_errors),
             "validation_errors": list(self.validation_errors),
         }
+
+
+def _check_weight_dir_structure(ckpt: Path) -> List[str]:
+    """Reject weight directories (params/, weights/, model/) sitting at the
+    publish root without a step/epoch prefix.
+
+    Valid layouts nest weights under a step identifier:
+        step_49999/params/
+        epoch_200/params/
+        49999/params/
+        checkpoints/step_49999/params/
+
+    Invalid: params/ directly at root — loses checkpoint identity.
+    """
+    errors: List[str] = []
+    for entry in sorted(ckpt.iterdir()):
+        if not entry.is_dir():
+            continue
+        if entry.name in _WEIGHT_DIR_NAMES:
+            errors.append(
+                f"Weight directory '{entry.name}/' is at the publish root. "
+                f"Nest it under a step or epoch prefix "
+                f"(e.g. step_N/{entry.name}/ or epoch_N/{entry.name}/) "
+                f"so the checkpoint retains its training identity."
+            )
+    return errors
 
 
 def check_publish_ready(
@@ -99,6 +129,8 @@ def check_publish_ready(
             packaging.append(f"Missing required file: {filename}")
         else:
             present_files.add(filename)
+
+    packaging.extend(_check_weight_dir_structure(ckpt))
 
     for filename in NON_EMPTY_FILES:
         if filename not in present_files:
