@@ -43,8 +43,12 @@ Follow this order. The phase sections below provide detailed commands.
 
 3. **Phase 3: promote for target runtime**
    - Read the cluster profile.
-   - For Slurm/Apptainer targets, build/convert the correct architecture image
-     and place heavy artifacts on scratch.
+   - For Slurm/Apptainer targets, build the `.sif` locally and upload only the
+     `.sif` — do not upload the Docker tar (it is typically 2x+ the `.sif` size).
+     Build from `docker-daemon://` when apptainer is local, or via a dockerized
+     apptainer toolchain otherwise. Only `docker save` + upload a tar + convert
+     on the cluster as a last resort when apptainer cannot run locally at all.
+     Build the correct architecture image and place heavy artifacts on scratch.
    - For Docker-native VMs, clone/build on the VM if the cluster profile says so.
 
 4. **Verify promoted artifact**
@@ -128,23 +132,31 @@ The deployment workflow:
 
 1. Push code to GitHub and pull on the HPC.
 2. Read `cluster-profiles/<cluster_name>.md` to check the container runtime. Not all clusters run Docker — many require `.sif` images via `apptainer`/`singularity`. This determines what you upload.
-3. Export the Docker image (`docker save`). If the cluster requires `.sif`, convert locally (`apptainer build`) before uploading. If `apptainer` is not installed locally, upload the `.tar` and convert on the cluster (most HPC clusters have `apptainer` available as a module — check the cluster profile).
-4. Upload the container artifact and any datasets to HPC scratch.
+3. **Build the `.sif` locally and upload only the `.sif`. Do not upload the Docker tar.** The `.sif` is the only artifact the cluster needs; everything else is throwaway transport. An uncompressed `docker save` tar is typically 2x+ the size of the resulting `.sif`, so uploading the tar and converting on the cluster moves far more bytes than necessary and wastes scratch — the conversion produces the `.sif` you could have built and uploaded directly.
+   - **Apptainer available locally (run `which apptainer`):** build straight from the Docker daemon — `apptainer build <image>_<tag>.sif docker-daemon://<image>:<tag>` — so there is no `docker save`, no `.tar`, and no gzip-header failure. The cluster never sees a tar.
+   - **No native apptainer locally:** use a dockerized apptainer/singularity toolchain (see Overview) to build the `.sif` locally, or install apptainer. Prefer this over uploading a tar — you still upload only the small `.sif`.
+   - **Last resort only — no way to run apptainer locally at all:** `docker save` an *uncompressed* `.tar`, upload it, convert on the cluster (`apptainer build ... docker-archive://`), then immediately delete the tar(s) to reclaim scratch. A gzipped `.tar.gz` fails with `gzip: invalid header`. Most HPC clusters have `apptainer` as a module — check the cluster profile.
+4. Upload the container artifact (the `.sif` when built locally; otherwise the tar) and any datasets to HPC scratch.
 5. Hand off to `hpc-training-operations/SKILL.md` for job submission.
 
 ### Phase 3 Quick Reference
 
 | Goal | Command |
 |---|---|
-| Export tar | `docker save -o <image>_<tag>.tar <image>:<tag>` |
-| Convert tar to sif (local) | `apptainer build <image>_<tag>.sif docker-archive://<image>_<tag>.tar` |
-| Convert tar to sif (on cluster) | Upload `.tar`, then on the cluster: `apptainer build <image>_<tag>.sif docker-archive://<image>_<tag>.tar` |
-| Upload artifact | `rsync -avP <artifact> <ssh_alias>:<remote_path>/` |
+| Check local apptainer (do this first) | `which apptainer` |
+| Build sif locally, no tar (preferred) | `apptainer build <image>_<tag>.sif docker-daemon://<image>:<tag>` |
+| Export tar (fallback, only if no local apptainer) | `docker save -o <image>_<tag>.tar <image>:<tag>` |
+| Convert tar to sif locally (if you already have a tar) | `apptainer build <image>_<tag>.sif docker-archive://<image>_<tag>.tar` |
+| Convert tar to sif on cluster (fallback) | Upload uncompressed `.tar`, then on the cluster: `apptainer build <image>_<tag>.sif docker-archive://<image>_<tag>.tar` |
+| Upload artifact (prefer the `.sif`) | `rsync -avP <artifact> <ssh_alias>:<remote_path>/` |
 | Verify remote artifact | `ssh <ssh_alias> "ls -lh <remote_path>/<artifact>"` |
+| Reclaim scratch after cluster-side convert | `ssh <ssh_alias> "rm -f <remote_path>/<image>_<tag>.tar <remote_path>/<image>_<tag>.tar.gz"` |
 
 ## Common Mistakes
 
 - Uploading a Docker tar without checking if the cluster even runs Docker — read the cluster profile for the container runtime first
+- Uploading a large intermediate transport artifact (e.g. a `docker save` tar, often 2x+ the final image size) to convert remotely, instead of producing the cluster-native artifact locally and uploading only that
+- Leaving intermediate transport artifacts on scratch after the final image is built
 - Reusing mutable tags (`latest`) so runs are not reproducible
 - Treating `python -V` or a bare import as a smoke test — run real application workflows
 - Skipping local smoke tests before conversion
