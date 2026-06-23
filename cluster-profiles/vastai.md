@@ -138,19 +138,21 @@ resources.
 ## Creating An Instance
 
 At minimum, `create instance` needs an offer ID and an image. For AutoHPC
-training, prefer SSH direct mode and a recent NVIDIA PyTorch image unless the
-target repo has a known image requirement.
+training, default to renting with the target repo's already-built training image
+from a registry. Prefer SSH direct mode unless the target repo has a known
+connection requirement.
 
 Choose the image deliberately before renting:
 
-- **Clean path:** build and push the target repo's training image to a registry
+- **Default path:** build and push the target repo's training image to a registry
   that VastAI can pull, then create the instance with `--image <registry/image>`.
-  This tests the real runtime from first boot and avoids installing a training
-  stack by hand on the rented host.
-- **Fast path:** launch a compatible base image, such as an NVIDIA PyTorch image,
-  then install the target repo dependencies inside the instance. This verifies
-  GPU/CUDA compatibility quickly, but dependency compatibility is still unproven
-  until the repo stack installs and a real smoke test runs.
+  This tests the real runtime from first boot, avoids repeated dependency setup
+  on paid GPU time, and catches image/runtime compatibility before launching a
+  long run.
+- **Probe path:** launch a compatible base image, such as an NVIDIA PyTorch image,
+  only for short CUDA or marketplace checks. This verifies GPU/CUDA access, but
+  dependency compatibility is still unproven until the repo stack installs and a
+  real smoke test runs.
 
 VastAI cannot launch from a local Docker image on the agent machine. If the
 desired image only exists locally, push it to a registry before using it in
@@ -158,7 +160,7 @@ desired image only exists locally, push it to a registry before using it in
 
 ```bash
 vastai create instance <offer_id> \
-  --image nvcr.io/nvidia/pytorch:25.03-py3 \
+  --image <registry>/<image>:<tag> \
   --disk 4000 \
   --ssh \
   --direct \
@@ -307,12 +309,14 @@ If the secret copy fails, stop and fix transfer/auth before continuing.
 ## Deploying Your Container
 
 VastAI already runs Docker. Do not build or upload Apptainer `.sif` files.
+For real training runs, push the target Docker image to Docker Hub, GHCR, or
+another registry that VastAI can pull, then rent the instance with that image.
 
 Common paths:
 
-1. Launch a broad NVIDIA PyTorch image, clone the repo, then install/build inside
-   the instance container.
-2. Launch the target repo's published Docker image directly.
+1. Launch the target repo's published Docker image directly.
+2. Launch a broad NVIDIA PyTorch image only for short probes, then destroy or
+   recycle into the real image before long training.
 3. Clone the repo and run its normal `docker/build_docker.sh` only if Docker is
    available inside the launched environment and the repo expects nested Docker.
 
