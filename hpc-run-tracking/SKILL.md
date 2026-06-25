@@ -202,6 +202,14 @@ Before syncing, choose the intended W&B destination deliberately. Ask the user
 for both `--entity` and `--project` unless both are already explicit in the run
 log/config. Do not rely on stale defaults embedded in the offline run.
 
+Also inspect the offline run size before syncing. W&B offline directories can
+quietly accumulate huge transient artifact payloads, especially under
+`wandb_data/artifacts/staging`. If the run directory is unexpectedly large,
+identify the bloated staging/artifact files and remove only transient W&B
+staging data before sync. Do not delete the run history, config, summary, media
+needed for the dashboard, or any checkpoint artifacts that still need to be
+published separately.
+
 ```bash
 autohpc-wandb-sync sync \
   --entity <wandb-entity> \
