@@ -41,8 +41,11 @@ templates and caveats.
    - Open/reuse an SSH ControlMaster connection for repeated commands.
 
 2. **Verify remote state**
-   - Confirm repo path, branch/commit, container path, dataset path, scratch space,
-     and relevant modules/runtime.
+   - Confirm repo path, branch/commit, container path, dataset path, scratch
+     space, log destination, and relevant modules/runtime.
+   - Run the storage preflight before submitting. Check both the filesystem that
+     will hold Slurm logs and the filesystem that will hold datasets,
+     checkpoints, W&B, and outputs.
    - For user data, run `ls`/size checks on the cluster; do not assume local paths
      match remote paths.
    - Never print or inline secrets; use token files, `GIT_ASKPASS`, or secure env
@@ -68,8 +71,10 @@ templates and caveats.
 
 6. **Debug or intervene**
    - Use `srun` for interactive debugging.
-   - Pause for confirmation before high-impact actions: `scancel`, destructive
-     cleanup, overwrite syncs, or large uploads.
+   - Pause for explicit user confirmation before high-impact actions:
+     `scancel`, deleting artifacts, destructive cleanup, storage pruning,
+     overwrite syncs, or large uploads.
+   - A completed upload or sync does not imply permission to delete the source machine, directory, or checkpoint.
 
 7. **Complete**
    - Capture accounting (`sacct`/`seff` when available), runtime, exit code,
@@ -125,9 +130,32 @@ A training sbatch script should be short and linear. Before writing one, check t
 
 **Structure:** SBATCH directives at the top, a few path variables, then one `apptainer exec` (or equivalent container run) command that calls the application entry point. That's it.
 
+**Log destination:** `#SBATCH --output` and `#SBATCH --error` are opened by
+Slurm before your script body runs. If they point at a full home/login-node
+filesystem, the job can fail before it writes useful logs. For noisy jobs, use
+an explicit scratch log path in the SBATCH directives, or verify the repo/log
+filesystem has enough free space immediately before submission.
+
 **Let the application load its own config.** If the repo uses Hydra, PyTorch Lightning, or any config framework, pass the config name/path as a CLI argument. Do not parse YAML in bash, do not re-map config fields to shell variables, do not build long argument lists from shell-parsed values. The application already knows how to load its config.
 
 **Storage layout:** Keep the repo clone on `$HOME` (small, code only). Keep heavy artifacts — container images, datasets, checkpoints, outputs, W&B caches — on scratch. Bind scratch paths into the container so training never writes large files to the home directory.
+
+**Storage preflight is mandatory before `sbatch`.** Jobs can fail before Python
+starts if the filesystem holding `#SBATCH --output` / `#SBATCH --error` is full,
+and training can fail or hang later when scratch fills during checkpoint/W&B
+writes. Check free space and biggest directories on both home/log and scratch
+filesystems before submitting:
+
+```bash
+df -h "$HOME" "$SCRATCH_DIR" "$PROJECT_DIR"
+du -sh "$HOME" "$PROJECT_DIR" "$SCRATCH_DIR/$PROJECT_NAME" 2>/dev/null || true
+du -h --max-depth=1 "$SCRATCH_DIR/$PROJECT_NAME" 2>/dev/null | sort -hr
+test -w "$PROJECT_DIR" && echo "repo/log directory writable"
+test -w "$SCRATCH_DIR" && echo "scratch writable"
+```
+
+If the cluster has quota tooling, also check quota using the cluster profile.
+Stop before submission if either log destination or scratch is near full. Ask the user before deleting or pruning artifacts; otherwise move clearly temporary files only after confirming they are not needed. Do not assume "scratch is large" means it has room for this run.
 
 **Remote workspace hygiene:** Do not create ad hoc scripts, logs, manifests, or test files in the top level of a remote workspace, whether that is `$SCRATCH`, a VM home directory, or a cloud volume mount. The top level should contain project directories, not files like `passport_*.out`, `sign_*.sh`, or `test_extract.py`. Put temporary run artifacts under a run-scoped project directory such as `<remote_project_dir>/autohpc_runs/<run_id>/`; durable Slurm scripts belong in the target repo's `slurm/` directory.
 
@@ -198,6 +226,7 @@ apptainer exec --nv \
 | W&B offline sync | `wandb sync <offline_run_dir>` |
 | Interactive debug shell | `srun --gpus=1 --time=00:30:00 --pty /bin/bash` |
 | Scratch usage | `du -sh <scratch_dir>` and `du -h --max-depth=1 <scratch_dir> \| sort -hr` |
+| Filesystem free space | `df -h <home_or_log_dir> <scratch_dir> <output_dir>` |
 
 ## Observability Guidance
 
@@ -225,6 +254,8 @@ restricted clusters, then sync later. Never inline `WANDB_API_KEY`.
 - Mixing local and remote paths in one command
 - Copying large datasets with `scp -r` when resumable `rsync -P` is needed
 - Submitting without verifying dataset paths exist on the cluster
+- Submitting without checking free space for Slurm logs, scratch outputs,
+  checkpoints, and W&B offline dirs
 - Submitting without checking script/account/partition settings
 - Creating indirection layers for container bind mounts (symlinks, wrapper dirs) instead of binding directly
 - Forgetting `module load` for the container runtime (check cluster profile)

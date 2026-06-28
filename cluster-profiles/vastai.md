@@ -6,9 +6,7 @@ Create the following as always-on agent rules in the **target repo**. These
 carry operational gotchas that must persist across sessions.
 
 **VastAI instance lifecycle:** VastAI instances are rented cloud machines. Always
-check for existing instances before creating a new one, and destroy the instance
-when the run is complete and artifacts are downloaded. Idle GPU machines are
-expensive.
+check for existing instances before creating a new one. Never destroy an instance without explicit user confirmation in the current conversation, even after checkpoints have been uploaded or downloaded — the user may intend to reuse the machine. Idle GPU machines are expensive, so ask promptly once durable artifacts are safe.
 
 **VastAI offers are ephemeral:** Offer IDs come from live marketplace search and
 can disappear between UI inspection and CLI rental. Always re-query the CLI
@@ -264,6 +262,23 @@ By default, treat instance disk as ephemeral local storage.
 - HF cache: put under the large disk path, not a tiny default cache path.
 - Checkpoints/outputs/W&B: write to a run-scoped output directory.
 
+Before building/pulling images, copying datasets, or starting training, inspect
+disk space on the mounted workspace/output paths. VastAI disks are rented per
+instance and can be smaller than expected if the offer or `--disk` request was
+wrong.
+
+```bash
+df -h / /workspace /workspace/outputs 2>/dev/null || df -h
+du -sh /workspace /workspace/outputs /workspace/.cache 2>/dev/null || true
+du -h --max-depth=1 /workspace 2>/dev/null | sort -hr
+docker system df 2>/dev/null || true
+```
+
+Stop before long training if the filesystem that holds logs, checkpoints, W&B
+offline runs, or Docker layers is near full. Clean stale Docker layers, old
+outputs, or failed-run caches only after confirming they are not the current
+run's durable artifacts.
+
 Before deleting the instance, download or upload all durable artifacts:
 
 ```bash
@@ -351,6 +366,7 @@ Always:
 - persist logs to a file with `tee`
 - set W&B offline mode unless online logging has already been verified
 - write outputs/checkpoints under a run-scoped directory on the large disk
+- check `df -h` for the output/checkpoint/W&B filesystem before launching
 - create or update a `run_logs/` entry in the target repo
 
 Example:
@@ -417,7 +433,11 @@ and validation passes.
 
 ## Destroying Instances
 
-Always inspect, download artifacts, and destroy the instance when finished.
+Always inspect and download/upload artifacts when finished, then ask the user
+whether to destroy, stop/reuse, or keep the instance alive.
+
+Do not infer permission from a successful upload, a completed sync, or a prior
+general rule about cleaning up machines.
 
 ```bash
 vastai show instances-v1 --raw
@@ -425,14 +445,15 @@ vastai show instances-v1 --raw
 # Download artifacts using the instance SSH/SCP details.
 rsync -avP <instance_ssh>:/workspace/outputs/<run_id>/ ./outputs/<run_id>/
 
-# Destroy when the user confirms artifacts are safe.
+# Only after explicit user confirmation in this conversation.
 vastai destroy instance <instance_id> --yes
 ```
 
 `vastai destroy instance <id> --yes` is confirmed in VastAI CLI 1.1.1. If a
 future CLI version changes the lifecycle verb, inspect `vastai --help` and use
-the current documented destroy/delete command. Never leave an idle GPU instance
-running while investigating CLI syntax.
+the current documented destroy/delete command. While waiting for user approval,
+report the idle instance ID, hourly cost if known, and what artifacts have been
+made durable.
 
 ## Notes
 
@@ -443,6 +464,7 @@ running while investigating CLI syntax.
 - Use labels that include project and run purpose; labels make cleanup safer.
 - Prefer `--ssh --direct` for agent-operated sessions when direct ports are
   available.
+- Never destroy an instance, delete outputs, prune Docker layers, or remove volumes without explicit user confirmation. Uploading checkpoints does not mean the machine is no longer needed.
 - If an offer has excellent price but tiny disk, request a larger `--disk` and
   verify creation actually grants enough usable space.
 - Do not store secrets or credentials in this profile.

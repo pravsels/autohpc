@@ -43,6 +43,9 @@ Follow this order. The phase sections below provide detailed commands.
 
 3. **Phase 3: promote for target runtime**
    - Read the cluster profile.
+   - Before uploading or building remote artifacts, check free space on the
+     target filesystem that will receive containers, datasets, logs,
+     checkpoints, and W&B outputs.
    - For Slurm/Apptainer targets, build the `.sif` locally and upload only the
      `.sif` — do not upload the Docker tar (it is typically 2x+ the `.sif` size).
      Build from `docker-daemon://` when apptainer is local, or via a dockerized
@@ -116,7 +119,8 @@ If the target runs Docker natively, the export/convert/upload workflow does not 
 
 1. Follow the cluster profile to create and configure the VM.
 2. Push code to GitHub, clone on the VM, and build the image natively there.
-3. Run training directly with `docker run --gpus all`.
+3. Check VM disk space before Docker build/pull and before training.
+4. Run training directly with `docker run --gpus all`.
 
 This avoids cross-architecture builds and multi-GB image uploads. The cluster profile has the full workflow — instance creation, environment setup, training, and cleanup.
 
@@ -132,12 +136,16 @@ The deployment workflow:
 
 1. Push code to GitHub and pull on the HPC.
 2. Read `cluster-profiles/<cluster_name>.md` to check the container runtime. Not all clusters run Docker — many require `.sif` images via `apptainer`/`singularity`. This determines what you upload.
-3. **Build the `.sif` locally and upload only the `.sif`. Do not upload the Docker tar.** The `.sif` is the only artifact the cluster needs; everything else is throwaway transport. An uncompressed `docker save` tar is typically 2x+ the size of the resulting `.sif`, so uploading the tar and converting on the cluster moves far more bytes than necessary and wastes scratch — the conversion produces the `.sif` you could have built and uploaded directly.
+3. Check remote free space for the destination directory before uploading:
+   `df -h <remote_container_dir> <remote_scratch_dir>` and
+   `du -h --max-depth=1 <remote_project_dir> | sort -hr`.
+4. **Build the `.sif` locally and upload only the `.sif`. Do not upload the Docker tar.** The `.sif` is the only artifact the cluster needs; everything else is throwaway transport. An uncompressed `docker save` tar is typically 2x+ the size of the resulting `.sif`, so uploading the tar and converting on the cluster moves far more bytes than necessary and wastes scratch — the conversion produces the `.sif` you could have built and uploaded directly.
    - **Apptainer available locally (run `which apptainer`):** build straight from the Docker daemon — `apptainer build <image>_<tag>.sif docker-daemon://<image>:<tag>` — so there is no `docker save`, no `.tar`, and no gzip-header failure. The cluster never sees a tar.
    - **No native apptainer locally:** use a dockerized apptainer/singularity toolchain (see Overview) to build the `.sif` locally, or install apptainer. Prefer this over uploading a tar — you still upload only the small `.sif`.
    - **Last resort only — no way to run apptainer locally at all:** `docker save` an *uncompressed* `.tar`, upload it, convert on the cluster (`apptainer build ... docker-archive://`), then immediately delete the tar(s) to reclaim scratch. A gzipped `.tar.gz` fails with `gzip: invalid header`. Most HPC clusters have `apptainer` as a module — check the cluster profile.
-4. Upload the container artifact (the `.sif` when built locally; otherwise the tar) and any datasets to HPC scratch.
-5. Hand off to `hpc-training-operations/SKILL.md` for job submission.
+5. Upload the container artifact (the `.sif` when built locally; otherwise the tar) and any datasets to HPC scratch.
+6. Re-check free space after upload/conversion. Clean up tar files and stale intermediates before handing off.
+7. Hand off to `hpc-training-operations/SKILL.md` for job submission.
 
 ### Phase 3 Quick Reference
 
@@ -157,6 +165,9 @@ The deployment workflow:
 - Uploading a Docker tar without checking if the cluster even runs Docker — read the cluster profile for the container runtime first
 - Uploading a large intermediate transport artifact (e.g. a `docker save` tar, often 2x+ the final image size) to convert remotely, instead of producing the cluster-native artifact locally and uploading only that
 - Leaving intermediate transport artifacts on scratch after the final image is built
+- Promoting containers without checking target disk space first — a full
+  container/checkpoint filesystem can break upload, Slurm logging, or later
+  checkpoint writes
 - Reusing mutable tags (`latest`) so runs are not reproducible
 - Treating `python -V` or a bare import as a smoke test — run real application workflows
 - Skipping local smoke tests before conversion

@@ -6,7 +6,8 @@ Create the following as always-on agent rules in the **target repo**. These carr
 
 **GCloud GPU quota:** Before creating a GPU instance, always verify regional quota first. If quota is 0, the create command fails with a confusing error — don't debug the instance config, check quota.
 
-**GCloud instance lifecycle:** These are ephemeral VMs, not persistent cluster nodes. Always delete the instance when training is done (`gcloud compute instances delete`). GPU instances are expensive — forgetting to delete wastes money.
+**GCloud instance lifecycle:** These are ephemeral VMs, not persistent cluster
+nodes. GPU instances are expensive, but never delete an instance without explicit user confirmation in the current conversation, even after checkpoints have been uploaded or downloaded — the user may intend to reuse the VM. Ask promptly once durable artifacts are safe.
 
 ## Authoritative Resources
 
@@ -153,6 +154,21 @@ Everything lives on the boot disk. There is no separate scratch filesystem.
 - Checkpoints/outputs: written to a bind-mounted directory on the boot disk.
 - W&B cache: bind-mount a directory from the host into the container.
 
+Before building/pulling images, uploading datasets, or starting training, check
+boot disk usage. A full boot disk can break Docker pulls/builds, prevent logs
+from being written, or fail checkpoint/W&B writes mid-run.
+
+```bash
+df -h / /var/lib/docker /path/to/outputs 2>/dev/null || df -h
+du -sh /var/lib/docker /path/to/outputs /path/to/repo 2>/dev/null || true
+du -h --max-depth=1 /path/to/outputs 2>/dev/null | sort -hr
+docker system df 2>/dev/null || true
+```
+
+If the output path is close to full, clean up or resize before launching. Do
+not rely on the nominal boot disk size; Docker layers, HF caches, datasets,
+checkpoints, and W&B offline logs all share the same disk.
+
 To upload files from your local machine:
 
 ```bash
@@ -220,6 +236,11 @@ No sbatch scripts. Run training directly with Docker.
 
 **Always persist logs to a file.** `docker logs` output is lost if the container crashes or is removed. Use `tee` to write to a bind-mounted path — this is the equivalent of Slurm's `.out`/`.err` files.
 
+**Always check disk before launch.** The bind-mounted outputs path and Docker
+storage must have enough free space for logs, checkpoints, W&B offline files,
+and any temporary artifacts. Run the storage checks above immediately before
+starting the training container.
+
 ```bash
 docker run --detach --gpus all --name training \
     --shm-size=16g \
@@ -268,7 +289,11 @@ Do not inline the API key in commands or scripts. Store it in a dotfile on the V
 
 ## Deleting the Instance
 
-**Always delete when done.** GPU instances are expensive. Download results first — the boot disk is destroyed with the instance.
+GPU instances are expensive, so ask about cleanup when work is done. Download or
+upload results first, then ask the user whether to delete, stop/reuse, or keep
+the VM alive. Do not infer permission from a successful upload, a completed
+sync, or a prior general cleanup rule. The boot disk is destroyed with the
+instance unless it was created separately.
 
 ```bash
 # Download results before deleting
@@ -277,7 +302,7 @@ gcloud compute scp --recurse <instance_name>:/path/to/outputs ./local-outputs --
 # Check what's running
 gcloud compute instances list
 
-# Delete
+# Only after explicit user confirmation in this conversation.
 gcloud compute instances delete <instance_name> --zone=<zone> --quiet
 ```
 
@@ -285,5 +310,6 @@ gcloud compute instances delete <instance_name> --zone=<zone> --quiet
 
 - GPU VMs cannot be live-migrated. GCP will terminate them for host maintenance — training must support checkpoint/resume.
 - The boot disk persists only as long as the instance exists. If you delete the instance, the boot disk is deleted too (unless you created it separately). Download any results before deleting.
+- Never delete an instance, remove output directories, prune Docker layers, or delete disks without explicit user confirmation. Uploading checkpoints does not mean the VM is no longer needed.
 - Code written for multi-GPU DDP (`torchrun`) may use bare `cuda` instead of `cuda:0` as the device. This causes errors on single-GPU runs — check and fix before submitting.
 - Do not store secrets or credentials in this profile.

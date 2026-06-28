@@ -42,6 +42,21 @@ ssh <PROJECT_ID>.aip2.isambard
 - Home: `/home/<project_code>/<username>` — small quota, code only. Use for `git clone`.
 - Scratch: `/scratch/<project_code>/<username>` — large (TBs), no backup. Use for containers, datasets, checkpoints, outputs, W&B caches.
 
+Before uploading artifacts or submitting jobs, check both home and scratch.
+Home can fill from accidental large files and then Slurm may fail before it can
+write `.out` / `.err` logs. Scratch can fill from containers, datasets,
+checkpoints, and W&B offline runs.
+
+```bash
+df -h /home/<project_code>/<username> /scratch/<project_code>/<username>
+du -sh /home/<project_code>/<username> /scratch/<project_code>/<username>/<repo> 2>/dev/null || true
+du -h --max-depth=1 /scratch/<project_code>/<username>/<repo> 2>/dev/null | sort -hr
+```
+
+If Slurm logs are written under the repo in home, verify home has enough free
+space immediately before `sbatch`, or point `#SBATCH --output` and
+`#SBATCH --error` at a scratch log directory.
+
 ## Modules
 
 Include in sbatch scripts before running containers:
