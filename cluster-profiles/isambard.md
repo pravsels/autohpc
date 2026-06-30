@@ -98,6 +98,18 @@ srun --ntasks=1 --gpus=1 --jobid=<job_id> --overlap --pty /bin/bash -l
 sbatch slurm/<training_script>.sh
 ```
 
+### Queue Start Estimates
+
+Use Slurm's start-time estimator to see when queued jobs are expected to begin:
+
+```bash
+squeue --me --start
+```
+
+The `START_TIME` and `SCHEDNODES` fields are estimates and can change as
+priority, reservations, and backfill opportunities change. This is especially
+useful after submitting full-node GPU jobs that sit in `PD (Priority)`.
+
 ## GitHub Access
 
 GitHub SSH keys don't work from Isambard. Clone repos using HTTPS with a personal access token (PAT). The user may have a token file on the cluster (e.g. `~/pat.txt`). Use `GIT_ASKPASS` to pass the token without exposing it in command history:
