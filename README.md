@@ -20,20 +20,21 @@ user. Wait for confirmation before continuing.
 | Signal | Phase |
 |--------|-------|
 | No Dockerfile or broken image build | Phase 1 — local Docker |
-| Dockerfile works but training fails on user's data format | Phase 2 — dataset adaptation |
-| Image works locally, no remote deployment done yet | Phase 3 — ask user for target environment |
-| `slurm/` scripts exist, no `run_logs/` or empty `run_logs/` | Phase 3 — first submission |
-| `run_logs/` has run logs with results | Ongoing — run tracking |
-| Training finished and checkpoint has no `MODEL_PASSPORT.json` / `SIGNOFF.json` | Post-train — checkpoint passport |
-| User is about to upload/copy/hand off a checkpoint without passport/signoff | Post-train — checkpoint passport |
-| Checkpoint has passing `SIGNOFF.json`; next step is first robot/inference run | Post-passport — deployment protocol |
-| Checkpoint has passing `SIGNOFF.json` and eval logs exist | Ongoing — eval tracking |
-| Signed checkpoint needs a promotion decision | Checkpoint triage — follow `eval-tracking/SKILL.md` promotion notes |
+| Image works but training fails on user's data format | Phase 2 — dataset adaptation |
+| Before the first full run, or policies are uniformly bad | Pre-train — model–dataset audit |
+| Image works locally, no remote deployment yet | Phase 3 — ask user for target environment |
+| `slurm/` scripts exist but `run_logs/` is empty | Phase 3 — first submission |
+| `run_logs/` has results | Ongoing — run tracking |
+| Checkpoint (or a checkpoint about to be moved) lacks `MODEL_PASSPORT.json` / `SIGNOFF.json` | Post-train — checkpoint passport |
+| Passing `SIGNOFF.json`, first robot/inference run next | Post-passport — deployment protocol |
+| Passing `SIGNOFF.json` and eval logs exist | Ongoing — eval tracking |
+| Signed checkpoint needs a promotion decision | Checkpoint triage — see `eval-tracking/SKILL.md` |
 
 ## Skill Map
 
 - `hpc-container-promotion/SKILL.md` — local Docker build/test and container promotion.
 - `hpc-dataset-adaptation/SKILL.md` — adapt code to the user's dataset format.
+- `hpc-model-dataset-audit/SKILL.md` — reconcile base model, config, and dataset semantics before a full run (catches normalization/order/units/encoding mismatches that build and run fine).
 - `hpc-training-operations/SKILL.md` — Slurm submission, monitoring, and debugging.
 - `hpc-run-tracking/SKILL.md` — per-run training logs.
 - `checkpoint-passport/SKILL.md` — canonical `MODEL_PASSPORT.json` / `SIGNOFF.json` tooling and workflow.
