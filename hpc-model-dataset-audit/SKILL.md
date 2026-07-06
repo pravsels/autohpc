@@ -86,6 +86,13 @@ processor, and the real dataset with the repo's own libraries.
    - Dump, for A / B / C: normalization mode and stat availability, feature
      names and order, dtypes, value ranges, image scale and channel order, units,
      and relevant metadata.
+   - **Read the actual values in the actual files, not just declared stats.**
+     Declared stats can be missing, stale, or computed with the wrong statistic.
+     Sample real frames/records and compute the empirical per-dim min/max, mean,
+     std, and q01/q99; compare them against the declared stats. Then simulate
+     what the configured normalization (+ any downstream clamp/discretization)
+     does to those real values — e.g. what fraction of each dim saturates at the
+     clamp bound. A stat that exists is not a stat that is correct.
 
 3. **Reconcile A↔B↔C per check category.**
    - For each feature/field, produce a row: expected (A) / configured (B) /
@@ -157,9 +164,15 @@ a general category above.
 - **Normalization contract** — the mode the base was pretrained under vs. the
   config's `normalization_mapping`, and whether the dataset actually has the
   stats that mode needs (e.g. `QUANTILES` design vs. `MEAN_STD` override with no
-  q01/q99). Trace the downstream consequences: clamping to `[-1, 1]` and
-  discretization into bins mean the wrong norm scheme saturates state tokens and
-  clips action targets, embodiment-independent.
+  q01/q99). The failure mode is a **statistic/clamp mismatch**, not clamping per
+  se: if the model applies a hard `clamp(-1, 1)` (and/or bins) downstream, it
+  must be paired with `QUANTILES` (q01/q99 → [-1, 1], so only the ~2% tails
+  saturate). Pairing that clamp with `MEAN_STD` saturates ~half of each dim's
+  normal motion, because one std does not cover the motion range —
+  embodiment-independent, and it silently ruins every policy. Models with no
+  downstream clamp (linear `state_proj`) tolerate `MEAN_STD` z-scores fine. So
+  check both the statistic *and* whether a clamp/bin step follows it, and confirm
+  they are compatible.
 - **Layout & ordering** — the state-vector joint order (and gripper position in
   it) matches the base's expected order; image/camera key order matches the
   processor's positional image-token order (e.g. `top/wrist/front`); no silently
@@ -210,6 +223,12 @@ a general category above.
   runs, not that the semantics match.
 - Overriding the base model's normalization scheme for convenience (e.g. to skip
   computing quantile stats) against its core design.
+- Trusting declared dataset stats without reading real values — a stat that
+  exists can still be stale or the wrong statistic. Compute empirical
+  min/max/mean/std/q01/q99 from actual files and check what the configured
+  normalization does to them.
+- Pairing a downstream `clamp(-1, 1)`/binning step with `MEAN_STD` instead of
+  `QUANTILES` — the clamp is fine, the statistic behind it is wrong.
 - Checking shapes/dtypes but not the *order* of features or image tokens.
 - Assuming RGB — a custom OpenCV path can silently feed BGR.
 - Auditing the in-memory training config but not the saved artifact inference
