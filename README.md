@@ -1,6 +1,7 @@
 # AutoHPC
 
-Take an AI / ML repo from local Docker build to remote training, checkpoint signoff, eval and deployment preflight, with an AI agent doing the work.
+Take an AI / ML repo from local Docker build to remote training, checkpoint
+publishing, eval, and deployment preflight, with an AI agent doing the work.
 
 ## Quick Start
 
@@ -25,10 +26,10 @@ user. Wait for confirmation before continuing.
 | Image works locally, no remote deployment yet | Phase 3 — ask user for target environment |
 | `slurm/` scripts exist but `run_logs/` is empty | Phase 3 — first submission |
 | `run_logs/` has results | Ongoing — run tracking |
-| Checkpoint (or a checkpoint about to be moved) lacks `MODEL_PASSPORT.json` / `SIGNOFF.json` | Post-train — checkpoint passport |
-| Passing `SIGNOFF.json`, first robot/inference run next | Post-passport — deployment protocol |
-| Passing `SIGNOFF.json` and eval logs exist | Ongoing — eval tracking |
-| Signed checkpoint needs a promotion decision | Checkpoint triage — see `eval-tracking/SKILL.md` |
+| Checkpoint is ready to move or publish | Post-train — checkpoint integrity |
+| Downloaded checkpoint needs evaluation | Ongoing — eval tracking |
+| First robot/inference run is next | Pre-deploy — deployment protocol |
+| Evaluated checkpoint needs a promotion decision | Checkpoint triage — see `eval-tracking/SKILL.md` |
 
 ## Skill Map
 
@@ -37,18 +38,18 @@ user. Wait for confirmation before continuing.
 - `hpc-model-dataset-audit/SKILL.md` — reconcile base model, config, and dataset semantics before a full run (catches normalization/order/units/encoding mismatches that build and run fine).
 - `hpc-training-operations/SKILL.md` — Slurm submission, monitoring, and debugging.
 - `hpc-run-tracking/SKILL.md` — per-run training logs.
-- `checkpoint-passport/SKILL.md` — canonical `MODEL_PASSPORT.json` / `SIGNOFF.json` tooling and workflow.
+- `checkpoint-integrity/SKILL.md` — lightweight SHA-256 manifest generation and verification.
 - `wandb-sync/` — runnable W&B offline sync helper used by run tracking.
 - `eval-tracking/SKILL.md` — per-eval logs and promotion notes.
 - `deployment-protocol/` — first-run deployment preflight on robot or inference rig.
 - `cluster-profiles/` — cluster-specific docs and caveats.
 - `autoresearch/` — post-baseline autonomous experiment loops.
 
-Most folders are docs-only skills. `checkpoint-passport/` and `wandb-sync/`
+Most folders are docs-only skills. `checkpoint-integrity/` and `wandb-sync/`
 also ship installable Python packages:
 
 ```bash
-uv pip install -e ../autohpc/checkpoint-passport
+uv pip install -e ../autohpc/checkpoint-integrity
 uv pip install -e ../autohpc/wandb-sync
 ```
 
@@ -64,7 +65,7 @@ uv pip install -e ../autohpc/wandb-sync
 - The Docker image is the build artifact for local and remote work. Do not
   install dependencies on the host or use conda/mamba/venv as an alternative.
 - Keep the workflow direct: build image, push/upload as needed, run training,
-  log runs, passport checkpoints before moving them.
+  log runs, manifest checkpoint bundles before moving them.
 - Keep commit messages short and match the target repo's style.
 
 ## Adding A Cluster

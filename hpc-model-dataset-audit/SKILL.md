@@ -43,11 +43,10 @@ processor, and the real dataset with the repo's own libraries.
 
 - **(A) Base-checkpoint expectations** — what the pretrained model was built to
   receive: saved processor config, normalization mode, baked-in stats, input
-  token order, expected value ranges. This is authoritative and is reloaded
-  verbatim at inference. If the base has a `MODEL_PASSPORT.json`, its
-  `input_contract` is source (A) directly (see `checkpoint-passport/SKILL.md`).
-  If there is no saved contract, infer it from the base's training repo/docs and
-  mark those fields as inferred.
+  token order, expected value ranges. Saved runtime artifacts and the code that
+  loads them are authoritative because inference reloads them. If the
+  expectation is not encoded there, infer it from the base's training repo/docs
+  and mark it as inferred.
 - **(B) Training config** — the model/processor config the run will use:
   normalization mapping, image/feature keys, control-mode hints, and any
   overrides.
@@ -75,9 +74,9 @@ processor, and the real dataset with the repo's own libraries.
 
 1. **Locate the three sources.**
    - (A) Base checkpoint: find the saved processor/config artifacts inference
-     will reload (or a `MODEL_PASSPORT.json` `input_contract`). If none exist,
-     the contract is implicit — infer it from the base's training repo/docs and
-     flag those fields as inferred, not verified.
+     will reload and the code that interprets them. If none exist, the contract
+     is implicit — infer it from the base's training repo/docs and flag those
+     fields as inferred, not verified.
    - (B) Training config: the config + overrides the run will actually use.
    - (C) Dataset: path(s) reachable inside the container.
 
@@ -100,7 +99,7 @@ processor, and the real dataset with the repo's own libraries.
    - If no such reference exists, skip — do not fabricate one.
 
 5. **Verify train↔eval reload consistency.**
-   - Load the saved processor/passport the eval path will reload and confirm it
+   - Load the saved processor/config the eval path will reload and confirm it
      encodes the intended stats, masks, and order — not just what the training
      config says in memory.
 
@@ -122,7 +121,7 @@ sort). Maintain `audit_logs/timeline.md` as a chronological index.
 # <model> on <dataset> — model–dataset audit
 
 ## Sources
-- base_contract: `<path to saved processor/config or MODEL_PASSPORT.json>` (or `inferred from <ref>`)
+- base_contract: `<path to saved processor/config and loader code>` (or `inferred from <ref>`)
 - training_config: `<path>`
 - dataset: `<path>` (`<name>`)
 - known_good_reference: `<model or n/a>`
@@ -172,8 +171,8 @@ a general category above.
   1→0); action space is ee-pose vs joint-angle as the base expects; absolute vs
   delta targets; joint-convention/calibration version (e.g. LeRobot v2.1 vs
   v3.0 records) matches between training data and eval hardware.
-- **Train↔eval reload** — the saved processor/passport `input_contract` the eval
-  path reloads encodes the intended stats and masks (e.g. gripper normalization
+- **Train↔eval reload** — the saved processor/config the eval path reloads
+  encodes the intended stats and masks (e.g. gripper normalization
   on/off), so inference follows the same contract training baked in.
 
 **Physical checks the agent cannot run — flag them to the user:**
@@ -188,7 +187,7 @@ a general category above.
 
 | Goal | Approach |
 |---|---|
-| Read base contract | Saved processor/config, or `MODEL_PASSPORT.json` `input_contract` |
+| Read base contract | Saved processor/config plus the code that loads it |
 | Read training config | The config + overrides the run will use |
 | Inspect dataset semantics | Native library inside the container; dump names/order/dtype/range/stats |
 | Reconcile | Per-feature table: expected (A) / configured (B) / actual (C) / verdict |

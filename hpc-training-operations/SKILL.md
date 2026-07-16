@@ -80,7 +80,7 @@ templates and caveats.
    - Capture accounting (`sacct`/`seff` when available), runtime, exit code,
      checkpoint paths, W&B sync state, and next step.
    - Handoff to `hpc-run-tracking/SKILL.md` for log completion and
-     `checkpoint-passport/SKILL.md` before eval/upload.
+     `checkpoint-integrity/SKILL.md` when moving or publishing a checkpoint.
 
 ## Core Pattern
 
@@ -157,7 +157,7 @@ test -w "$SCRATCH_DIR" && echo "scratch writable"
 If the cluster has quota tooling, also check quota using the cluster profile.
 Stop before submission if either log destination or scratch is near full. Ask the user before deleting or pruning artifacts; otherwise move clearly temporary files only after confirming they are not needed. Do not assume "scratch is large" means it has room for this run.
 
-**Remote workspace hygiene:** Do not create ad hoc scripts, logs, manifests, or test files in the top level of a remote workspace, whether that is `$SCRATCH`, a VM home directory, or a cloud volume mount. The top level should contain project directories, not files like `passport_*.out`, `sign_*.sh`, or `test_extract.py`. Put temporary run artifacts under a run-scoped project directory such as `<remote_project_dir>/autohpc_runs/<run_id>/`; durable Slurm scripts belong in the target repo's `slurm/` directory.
+**Remote workspace hygiene:** Do not create ad hoc scripts, logs, manifests, or test files in the top level of a remote workspace, whether that is `$SCRATCH`, a VM home directory, or a cloud volume mount. The top level should contain project directories, not files like `manifest_*.out`, `hash_*.sh`, or `test_extract.py`. Put temporary run artifacts under a run-scoped project directory such as `<remote_project_dir>/autohpc_runs/<run_id>/`; durable Slurm scripts belong in the target repo's `slurm/` directory.
 
 **Only create scripts the user asked for.** If they say "training", create one training script. Do not also create eval, preflight, or "stage N" variants unless asked. Do not create scripts for things that should be run as direct `srun` commands.
 
