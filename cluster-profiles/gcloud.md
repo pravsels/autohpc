@@ -287,6 +287,21 @@ docker run --rm --network=host \
 
 Do not inline the API key in commands or scripts. Store it in a dotfile on the VM (e.g. `~/.wandb_key`).
 
+## Checkpoint Integrity
+
+On the VM holding the checkpoint, generate a manifest on the final publish
+bundle immediately before upload:
+
+```bash
+uv pip install -e ../autohpc/checkpoint-integrity
+manifest-checkpoint <checkpoint_or_publish_dir>
+```
+
+Include `CHECKPOINT_MANIFEST.json` in the upload. Run
+`verify-checkpoint <downloaded_dir>` after download and before eval or
+deployment. This verifies file bytes only; behavioral checks belong to the eval
+and deployment protocols.
+
 ## Deleting the Instance
 
 GPU instances are expensive, so ask about cleanup when work is done. Download or

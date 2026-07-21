@@ -7,7 +7,7 @@ description: Use when evaluating checkpoints to maintain a persistent log of wha
 
 ## Overview
 
-Use when evaluating a signed checkpoint. Eval logs record artifact provenance,
+Use when evaluating a checkpoint. Eval logs record artifact provenance,
 metrics, qualitative observations, and a verdict. Run logs track training; eval
 logs track the artifacts training produced.
 
@@ -19,22 +19,22 @@ logs track the artifacts training produced.
 
 ## Agent Algorithm
 
-1. **Gate on passport**
-   - Run or require `validate-checkpoint <ckpt_dir> --require-signoff`.
+1. **Verify artifact integrity**
+   - Run or require `verify-checkpoint <ckpt_dir>`.
    - If the CLI is unavailable, install/use
-     `checkpoint-passport` from this repo.
-   - If validation fails or signoff is missing, stop and follow
-     `checkpoint-passport/SKILL.md`.
+     `checkpoint-integrity` from this repo.
+   - If a declared file is missing or changed, stop and follow
+     `checkpoint-integrity/SKILL.md`.
 
 2. **Create eval log**
    - Create `eval_logs/<group>/<date>_<task>.md` before submission.
-   - Record checkpoint, passport path/verdict, source run log, config snapshot,
+   - Record checkpoint, manifest path/hash, source run log, config snapshot,
      dataset, command/script, and objective.
 
 3. **Submit/run eval**
    - Use the repo's real eval entry point.
-   - Ensure the eval harness reads the passport contract or runs the validation
-     gate at startup.
+   - Ensure the eval uses the checkpoint's real saved config, processor, and
+     normalization assets rather than reconstructing them from memory.
    - Record execution ID and start time.
 
 4. **Monitor progress**
@@ -63,7 +63,7 @@ Name logs `<date>_<task>.md`. Include:
 
 ## Provenance
 - checkpoint: `<path>`
-- passport: `<path>/MODEL_PASSPORT.json` (signoff verdict: `pass` | `soft_signal`)
+- manifest: `<path>/CHECKPOINT_MANIFEST.json` (sha256: `<hash>`)
 - source_run_log: `<path>`
 - config_snapshot: `<path>`
 - dataset: `<path or URL>`
@@ -113,8 +113,7 @@ Template:
 - hf_repo:
 - hf_revision:
 - checkpoint_path_or_snapshot:
-- passport_sha256:
-- signoff_sha256:
+- manifest_sha256:
 - source_run_log:
 
 ## Evidence Reviewed
@@ -136,15 +135,15 @@ Template:
 
 ## Stop Gates
 
-- No passing `SIGNOFF.json`.
-- Eval harness does not validate passport at startup.
+- Missing or failing `CHECKPOINT_MANIFEST.json`.
+- Eval does not load the checkpoint's saved config/processors/assets.
 - Missing checkpoint, dataset, or source run log.
 - Metrics/logs are missing or contradictory.
 - Promotion note lacks concrete eval evidence.
 
 ## Common Mistakes
 
-- Eval without checkpoint/passport provenance.
+- Eval without checkpoint/manifest provenance.
 - Metrics without qualitative artifact review.
 - Verdicts not tied to evidence.
 - Promotion notes that hide missing or contradictory evidence.

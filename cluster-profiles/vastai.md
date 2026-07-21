@@ -58,7 +58,7 @@ Skills that still apply:
 - `hpc-run-tracking/SKILL.md` - use instance ID/label as the execution ID.
 - `hpc-dataset-adaptation/SKILL.md` - still applies when the user's dataset
   schema differs.
-- `eval-tracking/SKILL.md` and `checkpoint-passport/SKILL.md` - unchanged after
+- `eval-tracking/SKILL.md` and `checkpoint-integrity/SKILL.md` - apply after
   checkpoints exist.
 
 ## CLI Setup And Auth
@@ -416,20 +416,20 @@ If using plain `wandb sync`, still pass the destination deliberately and read th
 token from a private file. Do not inline `WANDB_API_KEY` in reusable scripts or
 logs.
 
-## Checkpoint Passport And Download
+## Checkpoint Integrity And Download
 
-Before downloading, uploading, evaluating, or handing off a checkpoint, follow
-`checkpoint-passport/SKILL.md` in the training runtime:
+Generate a lightweight manifest on the exact bundle immediately before upload.
+Verify it after download and before evaluation or deployment:
 
 ```bash
-uv pip install -e ../autohpc/checkpoint-passport
-validate-checkpoint <ckpt_dir>
-sign-checkpoint <ckpt_dir> --reason '<reason>'
-validate-checkpoint <ckpt_dir> --require-signoff
+uv pip install -e ../autohpc/checkpoint-integrity
+manifest-checkpoint <checkpoint_or_publish_dir>
+# Upload or copy the bundle.
+verify-checkpoint <downloaded_dir>
 ```
 
-Only move checkpoints after `MODEL_PASSPORT.json` and `SIGNOFF.json` are present
-and validation passes.
+The manifest checks bytes only. Eval and deployment protocols separately audit
+model behavior and runtime semantics.
 
 ## Destroying Instances
 
